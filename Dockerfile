@@ -1,9 +1,6 @@
 FROM python:3.11-slim
 
-# Install system dependencies (FFmpeg is required for video remuxing)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg \
-    && rm -rf /var/lib/apt/lists/*
+# Pure binary patching — no FFmpeg needed
 
 # Set working directory
 WORKDIR /app

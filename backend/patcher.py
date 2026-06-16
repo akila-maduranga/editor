@@ -1,149 +1,89 @@
-import subprocess
 import os
 import struct
 import logging
-import json
+import shutil
 
 logger = logging.getLogger("tiktok_patcher")
 
-def get_video_info(input_path: str) -> dict:
-    """Uses ffprobe to get video stream details."""
-    cmd = [
-        "ffprobe",
-        "-v", "error",
-        "-select_streams", "v:0",
-        "-show_entries", "stream=width,height,bit_rate",
-        "-of", "json",
-        input_path
-    ]
-    try:
-        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-        data = json.loads(result.stdout)
-        if data.get("streams"):
-            return data["streams"][0]
-    except Exception as e:
-        logger.warning(f"ffprobe failed: {e}")
-    return {}
-
 def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", encode_1080p: bool = False) -> tuple[bool, str]:
     """
-    Patches an MP4 video to bypass TikTok compression using FFmpeg remuxing + binary patch.
+    Patches an MP4 video to bypass TikTok compression using pure binary patching.
+    Preserves the original container structure (no FFmpeg remux).
     """
     if not os.path.exists(input_path):
         return False, f"Input file '{input_path}' not found."
 
-    temp_path = f"{output_path}.temp.mp4"
+    # Copy input to output (preserves original atom layout)
+    shutil.copy2(input_path, output_path)
 
-    # ---------------------------------------------------------------------
-    # STEP 1: FFmpeg Remux - Strip old metadata, inject new ones
-    # ---------------------------------------------------------------------
-    cmd = [
-        "ffmpeg", "-y", "-i", input_path,
-        "-map_metadata", "-1",
-        "-brand", "isom",
-        # NOTE: Do NOT use +faststart. moov must stay at the end of the file
-        # for the mdat size corruption to produce the correct "invalid atom size"
-        # warning that TikTok's parser expects.
-        "-metadata", f"comment=Patched by {custom_tag} - 120fps Optimized",
-        "-metadata", "encoder=Lavf60.16.100",
-        "-metadata", f"title=fixed_by_{custom_tag.replace('@', '')}",
-        "-metadata:s:a:0", "language=und",
-    ]
-
-    if encode_1080p:
-        info = get_video_info(input_path)
-        width = int(info.get("width", 0)) if info.get("width") else 0
-        if width > 1920:
-            logger.info(f"Scaling video from {width}px width down to 1080p")
-            cmd.extend(["-c:v", "libx264", "-preset", "fast", "-crf", "23"])
-            cmd.extend(["-vf", "scale='min(1920,iw)':'min(1080,ih)':force_original_aspect_ratio=decrease"])
-            cmd.extend(["-c:a", "copy"])
-        else:
-            logger.info("Video is already <= 1080p, using stream copy")
-            cmd.extend(["-c", "copy"])
-    else:
-        cmd.extend(["-c", "copy"])
-
-    cmd.append(temp_path)
-
-    logger.info("Running FFmpeg remux...")
     try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True)
-    except Exception as e:
-        err_msg = str(e)
-        logger.error(f"FFmpeg error: {err_msg}")
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
-        return False, f"FFmpeg error: {err_msg}"
-
-    # ---------------------------------------------------------------------
-    # STEP 2: Binary Patch - Inflate stsz frame count + corrupt mdat size
-    # ---------------------------------------------------------------------
-    logger.info("Applying binary patches (stsz x10 + mdat +1)...")
-    try:
-        with open(temp_path, 'rb') as f:
+        with open(output_path, 'r+b') as f:
             data = bytearray(f.read())
+            file_size = len(data)
 
-        # --- 2a. Inflate ALL stsz sample counts 10x (the real exploit) ---
-        # Must inflate every stsz atom (video + audio tracks) since find()
-        # only returns the first match.
-        stsz_patched = 0
-        search_start = 0
-        while True:
-            stsz_offset = data.find(b'stsz', search_start)
-            if stsz_offset == -1:
-                break
-            # stsz: size(4) + type(4) + version_flags(4) + sample_size(4) + sample_count(4)
-            sample_count_off = stsz_offset + 16
-            current_count = struct.unpack('>I', data[sample_count_off:sample_count_off+4])[0]
-            new_count = current_count * 10
-            struct.pack_into('>I', data, sample_count_off, new_count)
-            logger.info(f"Found 'stsz' at offset {stsz_offset}, count: {current_count} -> {new_count}")
-            stsz_patched += 1
-            search_start = stsz_offset + 4
-        if stsz_patched == 0:
-            logger.warning("Could not find any 'stsz' atom.")
-        else:
-            logger.info(f"Patched {stsz_patched} stsz atom(s)")
+            logger.info(f"File size: {file_size:,} bytes, scanning for atoms...")
 
-        # --- 2b. Corrupt mdat declared size (+1 byte) ---
-        index = 0
-        mdat_offset = -1
-        mdat_size = 0
+            # --- 1. Patch FTYP major brand to 'isom' ---
+            ftyp = data.find(b'ftyp')
+            if ftyp != -1:
+                data[ftyp+4:ftyp+8] = b'isom'
+                logger.info("Patched FTYP major brand to 'isom'")
+            else:
+                logger.warning("FTYP atom not found")
 
-        while index < len(data) - 8:
-            atom_size = struct.unpack('>I', data[index:index+4])[0]
-            atom_type = data[index+4:index+8].decode('ascii', errors='ignore')
+            # --- 2. Corrupt MDAT declared size (+1 byte) ---
+            mdat = data.find(b'mdat')
+            if mdat != -1:
+                current_size = struct.unpack('>I', data[mdat:mdat+4])[0]
+                new_size = current_size + 1
+                data[mdat:mdat+4] = struct.pack('>I', new_size)
+                logger.info(f"Corrupted MDAT at offset {mdat}, size: {current_size:,} -> {new_size:,}")
+            else:
+                logger.warning("MDAT atom not found")
 
-            if atom_type == 'mdat':
-                mdat_offset = index
-                mdat_size = atom_size
-                break
+            # --- 3. Find ALL stsz atoms, patch the LAST one (usually video track) ---
+            stsz_positions = []
+            pos = 0
+            while pos < len(data) - 4:
+                pos = data.find(b'stsz', pos)
+                if pos == -1:
+                    break
+                stsz_positions.append(pos)
+                pos += 1
 
-            if atom_size < 8:
-                break
+            if stsz_positions:
+                stsz_offset = stsz_positions[-1]
+                sample_count_off = stsz_offset + 16
 
-            index += atom_size
-            if index >= len(data):
-                break
+                current_count = struct.unpack('>I', data[sample_count_off:sample_count_off+4])[0]
+                new_count = current_count * 10
 
-        if mdat_offset != -1:
-            new_mdat_size = mdat_size + 1
-            struct.pack_into('>I', data, mdat_offset, new_mdat_size)
-            logger.info(f"Found 'mdat' at offset {mdat_offset}, size: {mdat_size} -> {new_mdat_size}")
-        else:
-            logger.warning("Could not find 'mdat' atom.")
+                struct.pack_into('>I', data, sample_count_off, new_count)
+                logger.info(f"Patched STSZ at offset {stsz_offset}, count: {current_count:,} -> {new_count:,}")
 
-        # Write the patched binary to the final output
-        with open(output_path, 'wb') as f:
+                # --- 4. Also inflate mvhd duration 10x ---
+                moov = data.find(b'moov')
+                if moov != -1:
+                    mvhd = data.find(b'mvhd', moov)
+                    if mvhd != -1:
+                        dur_off = mvhd + 24
+                        current_dur = struct.unpack('>I', data[dur_off:dur_off+4])[0]
+                        new_dur = current_dur * 10
+                        struct.pack_into('>I', data, dur_off, new_dur)
+                        logger.info(f"Updated mvhd duration: {current_dur} -> {new_dur}")
+            else:
+                logger.warning("STSZ atom not found!")
+
+            # Write patched data back
+            f.seek(0)
             f.write(data)
+            f.truncate()
 
-        os.remove(temp_path)
         logger.info("Binary patches applied successfully!")
         return True, "Video patched successfully!"
 
     except Exception as e:
-        logger.error(f"Error during binary patching: {e}")
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
-        return False, f"Binary patch failed: {str(e)}"
+        logger.error(f"Error during patching: {e}")
+        if os.path.exists(output_path):
+            os.remove(output_path)
+        return False, f"Patch failed: {str(e)}"

@@ -1,136 +1,103 @@
-import subprocess
 import os
 import struct
 import sys
+import shutil
 
 def patch_video(input_path, output_path, custom_tag="@akila"):
     """
-    Patches an MP4 video to bypass TikTok compression by:
-    1. Remuxing with FFmpeg (no re-encode).
-    2. Changing container brand to 'isom'.
-    3. Injecting custom metadata.
-    4. Slightly corrupting the 'mdat' atom size to trigger a parser fallback.
+    Patches an MP4 video to bypass TikTok compression using pure binary patching.
+    Preserves the original container structure.
     """
-    
     if not os.path.exists(input_path):
         print(f"Error: Input file '{input_path}' not found.")
         return
 
-    temp_path = "temp_remuxed_akila.mp4"
-
-    # ---------------------------------------------------------------------
-    # STEP 1: FFmpeg Remux - Strip old metadata, inject new ones
-    # ---------------------------------------------------------------------
-    # -c copy               : No re-encoding (preserves bitrate/fps)
-    # -map_metadata -1      : Remove all existing metadata (zeros out dates)
-    # -brand isom           : Set major brand to ISO Base Media (generic)
-    # -compatible_brands    : Set compatible brands to match TikTok's preferences
-    # -metadata ...         : Inject our custom tags
-    # NOTE: Do NOT use +faststart. moov must stay at end of file for
-    #       the mdat corruption to produce "invalid atom size".
-    # ---------------------------------------------------------------------
-    cmd = [
-        "ffmpeg",
-        "-i", input_path,
-        "-c", "copy",
-        "-map_metadata", "-1",
-        "-brand", "isom",
-        "-compatible_brands", "isomiso2avc1mp41",
-        "-metadata", f"comment=Patched by {custom_tag} - 120fps Optimized",
-        "-metadata", "encoder=Lavf60.16.100",
-        "-metadata", f"title=fixed_by_{custom_tag.replace('@', '')}",
-        "-metadata:s:a:0", "language=und",
-        temp_path
-    ]
-
-    print("🔧 Running FFmpeg remux...")
-    print(f"Command: {' '.join(cmd)}\n")
+    shutil.copy2(input_path, output_path)
     
-    try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True)
-    except subprocess.CalledProcessError as e:
-        print(f"FFmpeg error: {e.stderr}")
-        return
-
-    # ---------------------------------------------------------------------
-    # STEP 2: Binary Patches - Inflate stsz frame count + corrupt mdat size
-    # ---------------------------------------------------------------------
-    # The real exploit: inflating stsz sample count 10x tricks TikTok's
-    # encoder into seeing ~1200 fps, hitting a safety threshold that skips
-    # re-encoding. The mdat +1 creates a secondary "invalid atom size" flag.
-    # ---------------------------------------------------------------------
-    with open(temp_path, 'rb') as f:
+    with open(output_path, 'r+b') as f:
         data = bytearray(f.read())
+        file_size = len(data)
 
-    # --- 2a. Inflate ALL stsz sample counts 10x ---
-    stsz_patched = 0
-    search_start = 0
-    while True:
-        stsz_offset = data.find(b'stsz', search_start)
-        if stsz_offset == -1:
-            break
-        sample_count_off = stsz_offset + 16
-        current_count = struct.unpack('>I', data[sample_count_off:sample_count_off+4])[0]
-        new_count = current_count * 10
-        struct.pack_into('>I', data, sample_count_off, new_count)
-        print(f"✅ Found 'stsz' at offset {stsz_offset}, count: {current_count} -> {new_count}")
-        stsz_patched += 1
-        search_start = stsz_offset + 4
-    if stsz_patched == 0:
-        print("⚠️  Warning: Could not find any 'stsz' atom.")
-    else:
-        print(f"💪 Patched {stsz_patched} stsz atom(s)")
+        print(f"📁 File size: {file_size:,} bytes")
+        print("🔍 Scanning for atoms...")
 
-    # --- 2b. Corrupt mdat declared size (+1 byte) ---
-    index = 0
-    mdat_offset = -1
-    mdat_size = 0
+        # 1. Patch FTYP major brand to 'isom'
+        ftyp = data.find(b'ftyp')
+        if ftyp != -1:
+            data[ftyp+4:ftyp+8] = b'isom'
+            print("✅ Patched FTYP major brand to 'isom'")
+        else:
+            print("⚠️  FTYP not found")
 
-    while index < len(data) - 8:
-        atom_size = struct.unpack('>I', data[index:index+4])[0]
-        atom_type = data[index+4:index+8].decode('ascii', errors='ignore')
-        
-        if atom_type == 'mdat':
-            mdat_offset = index
-            mdat_size = atom_size
-            break
-        
-        if atom_size < 8:
-            break
-        
-        index += atom_size
-        if index >= len(data):
-            break
+        # 2. Corrupt MDAT declared size (+1 byte)
+        mdat = data.find(b'mdat')
+        if mdat != -1:
+            current_size = struct.unpack('>I', data[mdat:mdat+4])[0]
+            new_size = current_size + 1
+            data[mdat:mdat+4] = struct.pack('>I', new_size)
+            print(f"✅ Corrupted MDAT at offset {mdat}, size: {current_size:,} -> {new_size:,}")
+        else:
+            print("⚠️  MDAT not found")
 
-    if mdat_offset != -1:
-        new_size = mdat_size + 1
-        struct.pack_into('>I', data, mdat_offset, new_size)
-        print(f"✅ Corrupted 'mdat' at offset {mdat_offset}, size: {mdat_size} -> {new_size}")
-    else:
-        print("⚠️  Warning: Could not find 'mdat' atom.")
+        # 3. Find ALL stsz atoms, patch the LAST one (usually video track)
+        stsz_positions = []
+        pos = 0
+        while pos < len(data) - 4:
+            pos = data.find(b'stsz', pos)
+            if pos == -1:
+                break
+            stsz_positions.append(pos)
+            pos += 1
 
-    # Write the patched binary to the final output
-    with open(output_path, 'wb') as f:
+        if stsz_positions:
+            stsz_offset = stsz_positions[-1]
+            sample_count_off = stsz_offset + 16
+
+            current_count = struct.unpack('>I', data[sample_count_off:sample_count_off+4])[0]
+            new_count = current_count * 10
+
+            data[sample_count_off:sample_count_off+4] = struct.pack('>I', new_count)
+            print(f"   📊 STSZ at offset {stsz_offset}")
+            print(f"   Current sample count: {current_count:,}")
+            print(f"   New sample count: {new_count:,}")
+
+            # Verify
+            verify_count = struct.unpack('>I', data[sample_count_off:sample_count_off+4])[0]
+            if verify_count == new_count:
+                print(f"   ✅ Verification: {verify_count:,} matches expected")
+            else:
+                print(f"   ❌ Verification failed!")
+
+            # 4. Also inflate mvhd duration 10x
+            moov = data.find(b'moov')
+            if moov != -1:
+                mvhd = data.find(b'mvhd', moov)
+                if mvhd != -1:
+                    dur_off = mvhd + 24
+                    current_dur = struct.unpack('>I', data[dur_off:dur_off+4])[0]
+                    new_dur = current_dur * 10
+                    data[dur_off:dur_off+4] = struct.pack('>I', new_dur)
+                    print(f"   ✅ Updated mvhd duration: {current_dur} -> {new_dur}")
+        else:
+            print("⚠️  STSZ atom not found!")
+
+        # Write back
+        f.seek(0)
         f.write(data)
-    print(f"💾 Binary patches applied successfully!")
+        f.truncate()
 
-    # Clean up temporary file
-    if os.path.exists(temp_path) and temp_path != output_path:
-        os.remove(temp_path)
-
-    print(f"\n🎉 Done! Patched video saved to: {output_path}")
-    print(f"🏷️  Custom tag '{custom_tag}' injected into metadata.")
+        print(f"\n🎉 Done! Patched video saved to: {output_path}")
 
 # ---------------------------------------------------------------------
 # RUN THE SCRIPT
 # ---------------------------------------------------------------------
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python akila_patcher.py <input_video.mp4> [output_video.mp4]")
-        print("Example: python akila_patcher.py my_video.mp4 my_video_patched.mp4")
+        print("Usage: python patcher.py <input_video.mp4> [output_video.mp4]")
+        print("Example: python patcher.py my_video.mp4 my_video_patched.mp4")
         sys.exit(1)
 
     input_file = sys.argv[1]
     output_file = sys.argv[2] if len(sys.argv) > 2 else "patched_akila.mp4"
-    
+
     patch_video(input_file, output_file, custom_tag="@akila")
