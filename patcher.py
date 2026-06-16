@@ -13,7 +13,7 @@ def patch_video(input_path, output_path, custom_tag="@akila"):
         return
 
     shutil.copy2(input_path, output_path)
-    
+
     with open(output_path, 'r+b') as f:
         data = bytearray(f.read())
         file_size = len(data)
@@ -21,25 +21,26 @@ def patch_video(input_path, output_path, custom_tag="@akila"):
         print(f"📁 File size: {file_size:,} bytes")
         print("🔍 Scanning for atoms...")
 
-        # 1. Patch FTYP major brand to 'isom'
+        # 1. FTYP: major brand + first compatible brand
         ftyp = data.find(b'ftyp')
         if ftyp != -1:
-            data[ftyp+4:ftyp+8] = b'isom'
-            print("✅ Patched FTYP major brand to 'isom'")
+            data[ftyp+8:ftyp+12] = b'isom'
+            data[ftyp+16:ftyp+20] = b'isom'
+            print("✅ Patched FTYP: major brand -> 'isom', first compatible -> 'isom'")
         else:
             print("⚠️  FTYP not found")
 
-        # 2. Corrupt MDAT declared size (+1 byte)
+        # 2. MDAT: corrupt the SIZE field (+1 byte)
         mdat = data.find(b'mdat')
-        if mdat != -1:
-            current_size = struct.unpack('>I', data[mdat:mdat+4])[0]
+        if mdat >= 4:
+            current_size = struct.unpack('>I', data[mdat-4:mdat])[0]
             new_size = current_size + 1
-            data[mdat:mdat+4] = struct.pack('>I', new_size)
-            print(f"✅ Corrupted MDAT at offset {mdat}, size: {current_size:,} -> {new_size:,}")
+            data[mdat-4:mdat] = struct.pack('>I', new_size)
+            print(f"✅ Corrupted MDAT size at offset {mdat-4}: {current_size:,} -> {new_size:,}")
         else:
-            print("⚠️  MDAT not found")
+            print("⚠️  MDAT not found or at unsafe offset")
 
-        # 3. Find ALL stsz atoms, patch the LAST one (usually video track)
+        # 3. STSZ: find ALL occurrences, patch the LAST one (video track) 10x
         stsz_positions = []
         pos = 0
         while pos < len(data) - 4:
@@ -61,25 +62,38 @@ def patch_video(input_path, output_path, custom_tag="@akila"):
             print(f"   Current sample count: {current_count:,}")
             print(f"   New sample count: {new_count:,}")
 
-            # Verify
-            verify_count = struct.unpack('>I', data[sample_count_off:sample_count_off+4])[0]
-            if verify_count == new_count:
-                print(f"   ✅ Verification: {verify_count:,} matches expected")
-            else:
-                print(f"   ❌ Verification failed!")
-
-            # 4. Also inflate mvhd duration 10x
+            # 4. MVHD: inflate duration 10x + zero dates
             moov = data.find(b'moov')
             if moov != -1:
                 mvhd = data.find(b'mvhd', moov)
                 if mvhd != -1:
+                    # Zero creation_time (mvhd + 12) and modification_time (mvhd + 16)
+                    data[mvhd+12:mvhd+16] = b'\x00\x00\x00\x00'
+                    data[mvhd+16:mvhd+20] = b'\x00\x00\x00\x00'
+                    print("   ✅ Zeroed mvhd creation and modification dates")
+
+                    # Inflate duration (mvhd + 24)
                     dur_off = mvhd + 24
                     current_dur = struct.unpack('>I', data[dur_off:dur_off+4])[0]
                     new_dur = current_dur * 10
                     data[dur_off:dur_off+4] = struct.pack('>I', new_dur)
                     print(f"   ✅ Updated mvhd duration: {current_dur} -> {new_dur}")
+
         else:
             print("⚠️  STSZ atom not found!")
+
+        # 5. MDHD: set ALL track languages to 'und'
+        mdhd_count = 0
+        search_start = 0
+        while True:
+            mdhd = data.find(b'mdhd', search_start)
+            if mdhd == -1:
+                break
+            data[mdhd+28:mdhd+30] = struct.pack('>H', 0x51A3)
+            mdhd_count += 1
+            search_start = mdhd + 1
+        if mdhd_count:
+            print(f"   ✅ Set language to 'und' in {mdhd_count} mdhd atom(s)")
 
         # Write back
         f.seek(0)
@@ -87,6 +101,7 @@ def patch_video(input_path, output_path, custom_tag="@akila"):
         f.truncate()
 
         print(f"\n🎉 Done! Patched video saved to: {output_path}")
+        print("📤 Upload from PC browser with 'Allow high-quality uploads' ON.")
 
 # ---------------------------------------------------------------------
 # RUN THE SCRIPT
