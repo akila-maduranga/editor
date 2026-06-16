@@ -41,7 +41,9 @@ def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", e
         "ffmpeg", "-y", "-i", input_path,
         "-map_metadata", "-1",
         "-brand", "isom",
-        "-movflags", "+faststart",
+        # NOTE: Do NOT use +faststart. moov must stay at the end of the file
+        # for the mdat size corruption to produce the correct "invalid atom size"
+        # warning that TikTok's parser expects.
         "-metadata", f"comment=Patched by {custom_tag} - 120fps Optimized",
         "-metadata", "encoder=Lavf60.16.100",
         "-metadata", f"title=fixed_by_{custom_tag.replace('@', '')}",
@@ -82,17 +84,27 @@ def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", e
         with open(temp_path, 'rb') as f:
             data = bytearray(f.read())
 
-        # --- 2a. Inflate stsz sample count 10x (the real exploit) ---
-        stsz_offset = data.find(b'stsz')
-        if stsz_offset != -1:
+        # --- 2a. Inflate ALL stsz sample counts 10x (the real exploit) ---
+        # Must inflate every stsz atom (video + audio tracks) since find()
+        # only returns the first match.
+        stsz_patched = 0
+        search_start = 0
+        while True:
+            stsz_offset = data.find(b'stsz', search_start)
+            if stsz_offset == -1:
+                break
             # stsz: size(4) + type(4) + version_flags(4) + sample_size(4) + sample_count(4)
             sample_count_off = stsz_offset + 16
             current_count = struct.unpack('>I', data[sample_count_off:sample_count_off+4])[0]
             new_count = current_count * 10
             struct.pack_into('>I', data, sample_count_off, new_count)
-            logger.info(f"Found 'stsz' at offset {stsz_offset}, frame count: {current_count} -> {new_count}")
+            logger.info(f"Found 'stsz' at offset {stsz_offset}, count: {current_count} -> {new_count}")
+            stsz_patched += 1
+            search_start = stsz_offset + 4
+        if stsz_patched == 0:
+            logger.warning("Could not find any 'stsz' atom.")
         else:
-            logger.warning("Could not find 'stsz' atom.")
+            logger.info(f"Patched {stsz_patched} stsz atom(s)")
 
         # --- 2b. Corrupt mdat declared size (+1 byte) ---
         index = 0
