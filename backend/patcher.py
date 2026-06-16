@@ -1,20 +1,151 @@
 import os
-import struct
+import sys
 import logging
 import subprocess
 
 logger = logging.getLogger("tiktok_patcher")
 
+CONTAINERS = [b'moov', b'trak', b'mdia', b'minf', b'stbl', b'edts']
+
+def read_atoms(data, offset, end_pos):
+    atoms = []
+    while offset < end_pos:
+        if offset + 8 > len(data):
+            break
+        size = int.from_bytes(data[offset:offset+4], 'big')
+        name = bytes(data[offset+4:offset+8])
+        if size == 1:
+            size = int.from_bytes(data[offset+8:offset+16], 'big')
+            header_size = 16
+        else:
+            header_size = 8
+        if name in CONTAINERS:
+            children, _ = read_atoms(data, offset + header_size, offset + size)
+            atoms.append({'name': name, 'children': children})
+        else:
+            atoms.append({'name': name, 'data': bytes(data[offset+header_size:offset+size])})
+        offset += size
+    return atoms, offset
+
+def write_atoms(data, atoms):
+    result = bytearray()
+    for atom in atoms:
+        if 'children' in atom:
+            child_data = write_atoms(data, atom['children'])
+            size = 8 + len(child_data)
+            result.extend(size.to_bytes(4, 'big'))
+            result.extend(atom['name'])
+            result.extend(child_data)
+        else:
+            size = 8 + len(atom['data'])
+            result.extend(size.to_bytes(4, 'big'))
+            result.extend(atom['name'])
+            result.extend(atom['data'])
+    return bytes(result)
+
+def find_atom(atoms, path):
+    if not path:
+        return atoms
+    for atom in atoms:
+        if atom['name'] == path[0]:
+            if len(path) == 1:
+                return atom
+            if 'children' in atom:
+                res = find_atom(atom['children'], path[1:])
+                if res:
+                    return res
+    return None
+
+def inject_fake_frames(data, target_frames=25570):
+    tree, _ = read_atoms(data, 0, len(data))
+    moov = find_atom(tree, [b'moov'])
+    if not moov:
+        raise ValueError("moov atom not found")
+
+    video_trak = None
+    for atom in moov['children']:
+        if atom['name'] == b'trak':
+            hdlr = find_atom([atom], [b'trak', b'mdia', b'hdlr'])
+            if hdlr and b'vide' in hdlr['data']:
+                video_trak = atom
+                break
+    if not video_trak:
+        raise ValueError("video track not found")
+
+    stbl = find_atom([video_trak], [b'trak', b'mdia', b'minf', b'stbl'])
+    if not stbl:
+        raise ValueError("stbl not found in video track")
+
+    stsz = find_atom(stbl['children'], [b'stsz'])
+    if not stsz:
+        raise ValueError("stsz not found")
+
+    stsz_data = bytearray(stsz['data'])
+    orig_count = int.from_bytes(stsz_data[8:12], 'big')
+    diff = target_frames - orig_count
+    if diff <= 0:
+        logger.info(f"Already has {orig_count} frames, no inflation needed")
+        result = write_atoms(data, tree)
+    else:
+        logger.info(f"STSZ: inflating {orig_count} -> {target_frames}")
+        stsz_data[8:12] = target_frames.to_bytes(4, 'big')
+        stsz_data.extend(b'\x00\x00\x00\x00' * diff)
+        stsz['data'] = bytes(stsz_data)
+
+        stts = find_atom(stbl['children'], [b'stts'])
+        if stts:
+            stts_data = bytearray(stts['data'])
+            first_entry_count = int.from_bytes(stts_data[8:12], 'big')
+            stts_data[8:12] = (first_entry_count + diff).to_bytes(4, 'big')
+            stts['data'] = bytes(stts_data)
+            logger.info(f"STTS: entry count {first_entry_count} -> {first_entry_count + diff}")
+
+        shift_amount = diff * 4
+        logger.info(f"Shifting chunk offsets by +{shift_amount}")
+        for trak in moov['children']:
+            if trak['name'] == b'trak':
+                t_stbl = find_atom([trak], [b'trak', b'mdia', b'minf', b'stbl'])
+                if not t_stbl:
+                    continue
+                for child in list(t_stbl['children']):
+                    if child['name'] == b'stco':
+                        co_data = bytearray(child['data'])
+                        entry_count = int.from_bytes(co_data[4:8], 'big')
+                        for i in range(entry_count):
+                            idx = 8 + i * 4
+                            old_val = int.from_bytes(co_data[idx:idx+4], 'big')
+                            co_data[idx:idx+4] = (old_val + shift_amount).to_bytes(4, 'big')
+                        child['data'] = bytes(co_data)
+                    elif child['name'] == b'co64':
+                        co_data = bytearray(child['data'])
+                        entry_count = int.from_bytes(co_data[4:8], 'big')
+                        for i in range(entry_count):
+                            idx = 8 + i * 8
+                            old_val = int.from_bytes(co_data[idx:idx+8], 'big')
+                            co_data[idx:idx+8] = (old_val + shift_amount).to_bytes(8, 'big')
+                        child['data'] = bytes(co_data)
+
+        result = write_atoms(data, tree)
+
+    # Final pass: MDAT size +1 (safe — mdat is last box with faststart)
+    mdat_pos = result.find(b'mdat')
+    if mdat_pos >= 4:
+        cur = int.from_bytes(result[mdat_pos-4:mdat_pos], 'big')
+        result = bytearray(result)
+        result[mdat_pos-4:mdat_pos] = (cur + 1).to_bytes(4, 'big')
+        result = bytes(result)
+        logger.info(f"MDAT size: {cur} -> {cur+1}")
+
+    return result
+
+
 def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", encode_1080p: bool = False) -> tuple[bool, str]:
     if not os.path.exists(input_path):
         return False, f"Input file '{input_path}' not found."
 
-    # ------------------------------------------------------------------
-    # Stage 1: FFmpeg fast remux (clean base)
-    # ------------------------------------------------------------------
+    # Stage 1: FFmpeg clean remux
     ffmpeg_cmd = [
-        "ffmpeg", "-y",
-        "-i", input_path,
+        "ffmpeg", "-y", "-i", input_path,
         "-c", "copy",
         "-map_metadata", "-1",
         "-brand", "isom",
@@ -26,13 +157,11 @@ def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", e
         "-metadata", "copyright=",
         "-metadata", "comment=",
     ]
-
     if encode_1080p:
         ffmpeg_cmd += [
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
             "-vf", "scale='min(1920,iw)':min(1920,ih):force_original_aspect_ratio=decrease",
         ]
-
     ffmpeg_cmd.append(output_path)
 
     logger.info(f"Running FFmpeg: {' '.join(ffmpeg_cmd)}")
@@ -43,7 +172,6 @@ def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", e
             if os.path.exists(output_path):
                 os.remove(output_path)
             return False, f"FFmpeg failed: {result.stderr[:500]}"
-        logger.info("FFmpeg remux complete")
     except subprocess.TimeoutExpired:
         if os.path.exists(output_path):
             os.remove(output_path)
@@ -51,56 +179,17 @@ def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", e
     except FileNotFoundError:
         return False, "FFmpeg not found"
 
-    # ------------------------------------------------------------------
-    # Stage 2: Targeted binary patches (scoped to correct atoms)
-    # ------------------------------------------------------------------
+    # Stage 2: stsz injector (proper atom tree manipulation)
     try:
-        with open(output_path, 'r+b') as f:
-            data = bytearray(f.read())
-
-            # Locate moov boundaries
-            moov = data.find(b'moov')
-            moov_end = len(data)
-            if moov != -1 and moov >= 4:
-                moov_size = struct.unpack('>I', data[moov-4:moov])[0]
-                moov_end = moov - 4 + moov_size
-
-            # --- A. STSZ: inflate video sample count x10 (within moov only) ---
-            stsz_positions = []
-            if moov != -1 and moov >= 4:
-                pos = moov
-                while pos < moov_end - 4:
-                    pos = data.find(b'stsz', pos)
-                    if pos == -1 or pos >= moov_end:
-                        break
-                    stsz_positions.append(pos)
-                    pos += 1
-
-            if stsz_positions:
-                stsz_off = stsz_positions[-1]
-                cnt_off = stsz_off + 16
-                cur = struct.unpack('>I', data[cnt_off:cnt_off+4])[0]
-                struct.pack_into('>I', data, cnt_off, cur * 10)
-                logger.info(f"STSZ: count {cur:,} -> {cur*10:,}")
-            else:
-                logger.warning("STSZ not found within moov")
-
-            # --- B. MDAT: increment size by 1 (search after moov) ---
-            mdat = data.find(b'mdat', moov_end if moov_end < len(data) else 0)
-            if mdat >= 4:
-                cur_size = struct.unpack('>I', data[mdat-4:mdat])[0]
-                struct.pack_into('>I', data, mdat-4, cur_size + 1)
-                logger.info(f"MDAT size: {cur_size:,} -> {cur_size+1:,}")
-
-            f.seek(0)
-            f.write(data)
-            f.truncate()
-
-        logger.info("Binary patches applied")
+        with open(output_path, 'rb') as f:
+            data = f.read()
+        patched = inject_fake_frames(data, target_frames=25570)
+        with open(output_path, 'wb') as f:
+            f.write(patched)
+        logger.info("STSZ injection complete")
         return True, "Video patched successfully!"
-
     except Exception as e:
-        logger.error(f"Binary patching error: {e}")
+        logger.error(f"Injection error: {e}")
         if os.path.exists(output_path):
             os.remove(output_path)
         return False, f"Patch failed: {str(e)}"
