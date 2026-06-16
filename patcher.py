@@ -6,7 +6,7 @@ import subprocess
 def patch_video(input_path, output_path, custom_tag="@akila", encode_1080p=False):
     """
     Two-stage patching:
-      1) FFmpeg re-encode with exploit-friendly settings.
+      1) FFmpeg fast remux (stream copy) — moov to front, strip metadata, brand, timescale.
       2) Binary overlay patches: STSZ x10, MDAT size +1, MVHD duration x10, MDHD language.
     """
     if not os.path.exists(input_path):
@@ -14,14 +14,12 @@ def patch_video(input_path, output_path, custom_tag="@akila", encode_1080p=False
         return
 
     # ------------------------------------------------------------------
-    # Stage 1: FFmpeg re-encode
+    # Stage 1: FFmpeg fast remux (stream copy, no re-encode)
     # ------------------------------------------------------------------
     ffmpeg_cmd = [
         "ffmpeg", "-y",
         "-i", input_path,
-        "-r", "1200",
-        "-c:v", "libx264", "-preset", "slow", "-crf", "17", "-pix_fmt", "yuv420p",
-        "-c:a", "copy",
+        "-c", "copy",
         "-map_metadata", "-1",
         "-brand", "isom",
         "-movflags", "+faststart",
@@ -34,19 +32,20 @@ def patch_video(input_path, output_path, custom_tag="@akila", encode_1080p=False
     ]
 
     if encode_1080p:
-        idx = ffmpeg_cmd.index("-c:v") + 1
-        ffmpeg_cmd.insert(idx,
-            "scale='min(1920,iw)':min(1920,ih):force_original_aspect_ratio=decrease")
+        ffmpeg_cmd += [
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+            "-vf", "scale='min(1920,iw)':min(1920,ih):force_original_aspect_ratio=decrease",
+        ]
 
     ffmpeg_cmd.append(output_path)
 
-    print("🚀 Running FFmpeg re-encode...")
+    print("🚀 Running FFmpeg remux (stream copy)...")
     print(f"   {' '.join(ffmpeg_cmd)}")
     result = subprocess.run(ffmpeg_cmd, capture_output=True, text=True)
     if result.returncode != 0:
         print(f"❌ FFmpeg failed:\n{result.stderr[:500]}")
         return
-    print("✅ FFmpeg re-encode complete")
+    print("✅ FFmpeg remux complete")
 
     # ------------------------------------------------------------------
     # Stage 2: Binary overlay patches

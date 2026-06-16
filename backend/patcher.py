@@ -8,21 +8,19 @@ logger = logging.getLogger("tiktok_patcher")
 def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", encode_1080p: bool = False) -> tuple[bool, str]:
     """
     Two-stage patching:
-      1) FFmpeg re-encode with exploit-friendly settings.
+      1) FFmpeg fast remux (stream copy) — moov to front, strip metadata, brand, timescale.
       2) Binary overlay patches: STSZ x10, MDAT size +1, MVHD duration x10, MDHD language.
     """
     if not os.path.exists(input_path):
         return False, f"Input file '{input_path}' not found."
 
     # ------------------------------------------------------------------
-    # Stage 1: FFmpeg re-encode
+    # Stage 1: FFmpeg fast remux (stream copy, no re-encode)
     # ------------------------------------------------------------------
     ffmpeg_cmd = [
         "ffmpeg", "-y",
         "-i", input_path,
-        "-r", "1200",
-        "-c:v", "libx264", "-preset", "slow", "-crf", "17", "-pix_fmt", "yuv420p",
-        "-c:a", "copy",
+        "-c", "copy",
         "-map_metadata", "-1",
         "-brand", "isom",
         "-movflags", "+faststart",
@@ -35,14 +33,16 @@ def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", e
     ]
 
     if encode_1080p:
-        ffmpeg_cmd.insert(ffmpeg_cmd.index("-c:v") + 1,
-            "scale='min(1920,iw)':min(1920,ih):force_original_aspect_ratio=decrease")
+        ffmpeg_cmd += [
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+            "-vf", "scale='min(1920,iw)':min(1920,ih):force_original_aspect_ratio=decrease",
+        ]
 
     ffmpeg_cmd.append(output_path)
 
     logger.info(f"Running FFmpeg: {' '.join(ffmpeg_cmd)}")
     try:
-        result = subprocess.run(ffmpeg_cmd, capture_output=True, text=True, timeout=600)
+        result = subprocess.run(ffmpeg_cmd, capture_output=True, text=True, timeout=300)
         if result.returncode != 0:
             logger.error(f"FFmpeg failed:\n{result.stderr}")
             if os.path.exists(output_path):
@@ -52,7 +52,7 @@ def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", e
     except subprocess.TimeoutExpired:
         if os.path.exists(output_path):
             os.remove(output_path)
-        return False, "FFmpeg timed out after 10 minutes"
+        return False, "FFmpeg timed out after 5 minutes"
     except FileNotFoundError:
         return False, "FFmpeg not found on the server"
 
