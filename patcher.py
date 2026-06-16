@@ -4,17 +4,12 @@ import sys
 import subprocess
 
 def patch_video(input_path, output_path, custom_tag="@akila", encode_1080p=False):
-    """
-    Two-stage patching:
-      1) FFmpeg fast remux (stream copy) — moov to front, strip metadata, brand, timescale.
-      2) Binary overlay patches: STSZ x10, MDAT size +1, MVHD duration x10, MDHD language.
-    """
     if not os.path.exists(input_path):
         print(f"Error: Input file '{input_path}' not found.")
         return
 
     # ------------------------------------------------------------------
-    # Stage 1: FFmpeg fast remux (stream copy, no re-encode)
+    # Stage 1: FFmpeg fast remux
     # ------------------------------------------------------------------
     ffmpeg_cmd = [
         "ffmpeg", "-y",
@@ -48,7 +43,7 @@ def patch_video(input_path, output_path, custom_tag="@akila", encode_1080p=False
     print("✅ FFmpeg remux complete")
 
     # ------------------------------------------------------------------
-    # Stage 2: Binary overlay patches
+    # Stage 2: Binary overlay patches (all scoped to correct boundaries)
     # ------------------------------------------------------------------
     with open(output_path, 'r+b') as f:
         data = bytearray(f.read())
@@ -57,7 +52,14 @@ def patch_video(input_path, output_path, custom_tag="@akila", encode_1080p=False
         print(f"📁 File size: {file_size:,} bytes")
         print("🔍 Applying binary overlay patches...")
 
-        # 1. FTYP safety net
+        # Locate moov boundaries once
+        moov = data.find(b'moov')
+        moov_end = file_size
+        if moov != -1 and moov >= 4:
+            moov_size = struct.unpack('>I', data[moov-4:moov])[0]
+            moov_end = moov - 4 + moov_size
+
+        # 1. FTYP
         ftyp = data.find(b'ftyp')
         if ftyp != -1:
             data[ftyp+4:ftyp+8] = b'isom'
@@ -66,24 +68,16 @@ def patch_video(input_path, output_path, custom_tag="@akila", encode_1080p=False
                 data[ftyp+12:ftyp+16] = b'isom'
             print("✅ FTYP: major -> 'isom', compatible -> 'isom'")
 
-        # 2. MDAT SIZE +1 (search AFTER moov to avoid false matches inside moov atom)
-        moov = data.find(b'moov')
-        mdat_search_start = 0
-        if moov != -1 and moov >= 4:
-            moov_size = struct.unpack('>I', data[moov-4:moov])[0]
-            mdat_search_start = moov - 4 + moov_size
-        mdat = data.find(b'mdat', mdat_search_start)
+        # 2. MDAT: corrupt TYPE field (reference approach — preserves box boundaries)
+        mdat = data.find(b'mdat', moov_end)
         if mdat >= 4:
-            current_size = struct.unpack('>I', data[mdat-4:mdat])[0]
-            new_size = current_size + 1
-            data[mdat-4:mdat] = struct.pack('>I', new_size)
-            print(f"✅ MDAT size: {current_size:,} -> {new_size:,}")
+            current_val = struct.unpack('>I', data[mdat:mdat+4])[0]
+            data[mdat:mdat+4] = struct.pack('>I', current_val + 1)
+            print(f"✅ MDAT type corrupted: 0x{current_val:08X} -> 0x{current_val+1:08X}")
 
-        # 3. STSZ: patch LAST occurrence within moov (video track) x10
+        # 3. STSZ: last occurrence within moov x10
         stsz_positions = []
         if moov != -1 and moov >= 4:
-            moov_size = struct.unpack('>I', data[moov-4:moov])[0]
-            moov_end = moov - 4 + moov_size
             pos = moov
             while pos < moov_end - 4:
                 pos = data.find(b'stsz', pos)
@@ -93,37 +87,40 @@ def patch_video(input_path, output_path, custom_tag="@akila", encode_1080p=False
                 pos += 1
 
         if stsz_positions:
-            stsz_offset = stsz_positions[-1]
-            sample_count_off = stsz_offset + 16
-            current_count = struct.unpack('>I', data[sample_count_off:sample_count_off+4])[0]
-            new_count = current_count * 10
-            data[sample_count_off:sample_count_off+4] = struct.pack('>I', new_count)
-            print(f"✅ STSZ: count {current_count:,} -> {new_count:,}")
+            stsz_off = stsz_positions[-1]
+            cnt_off = stsz_off + 16
+            cur = struct.unpack('>I', data[cnt_off:cnt_off+4])[0]
+            data[cnt_off:cnt_off+4] = struct.pack('>I', cur * 10)
+            print(f"✅ STSZ: count {cur:,} -> {cur*10:,}")
 
-            # 4. MVHD: zero dates + inflate duration x10
+            # 4. MVHD (within moov slice)
             if moov != -1:
-                mvhd = data.find(b'mvhd', moov)
-                if mvhd != -1:
+                moov_region = data[moov:moov_end]
+                mvhd_rel = moov_region.find(b'mvhd')
+                if mvhd_rel != -1:
+                    mvhd = moov + mvhd_rel
                     data[mvhd+12:mvhd+16] = b'\x00\x00\x00\x00'
                     data[mvhd+16:mvhd+20] = b'\x00\x00\x00\x00'
                     dur_off = mvhd + 24
-                    current_dur = struct.unpack('>I', data[dur_off:dur_off+4])[0]
-                    new_dur = current_dur * 10
-                    data[dur_off:dur_off+4] = struct.pack('>I', new_dur)
-                    print(f"✅ MVHD: dates zeroed, duration {current_dur} -> {new_dur}")
+                    cur_dur = struct.unpack('>I', data[dur_off:dur_off+4])[0]
+                    data[dur_off:dur_off+4] = struct.pack('>I', cur_dur * 10)
+                    print(f"✅ MVHD: dates zeroed, duration {cur_dur} -> {cur_dur*10}")
 
-        # 5. MDHD: set ALL track languages to 'und'
-        search_start = 0
-        mdhd_count = 0
-        while True:
-            mdhd = data.find(b'mdhd', search_start)
-            if mdhd == -1:
-                break
-            data[mdhd+28:mdhd+30] = struct.pack('>H', 0x51A3)
-            mdhd_count += 1
-            search_start = mdhd + 1
-        if mdhd_count:
-            print(f"✅ MDHD: language -> 'und' in {mdhd_count} track(s)")
+        # 5. MDHD: scope search to within moov only
+        if moov != -1 and moov >= 4:
+            moov_data = data[moov:moov_end]
+            mdhd_count = 0
+            search_pos = 0
+            while True:
+                mdhd = moov_data.find(b'mdhd', search_pos)
+                if mdhd == -1:
+                    break
+                abs_mdhd = moov + mdhd
+                data[abs_mdhd+28:abs_mdhd+30] = struct.pack('>H', 0x51A3)
+                mdhd_count += 1
+                search_pos = mdhd + 1
+            if mdhd_count:
+                print(f"✅ MDHD: language -> 'und' in {mdhd_count} track(s)")
 
         f.seek(0)
         f.write(data)

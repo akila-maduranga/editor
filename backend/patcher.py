@@ -6,16 +6,11 @@ import subprocess
 logger = logging.getLogger("tiktok_patcher")
 
 def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", encode_1080p: bool = False) -> tuple[bool, str]:
-    """
-    Two-stage patching:
-      1) FFmpeg fast remux (stream copy) — moov to front, strip metadata, brand, timescale.
-      2) Binary overlay patches: STSZ x10, MDAT size +1, MVHD duration x10, MDHD language.
-    """
     if not os.path.exists(input_path):
         return False, f"Input file '{input_path}' not found."
 
     # ------------------------------------------------------------------
-    # Stage 1: FFmpeg fast remux (stream copy, no re-encode)
+    # Stage 1: FFmpeg fast remux
     # ------------------------------------------------------------------
     ffmpeg_cmd = [
         "ffmpeg", "-y",
@@ -52,49 +47,48 @@ def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", e
     except subprocess.TimeoutExpired:
         if os.path.exists(output_path):
             os.remove(output_path)
-        return False, "FFmpeg timed out after 5 minutes"
+        return False, "FFmpeg timed out"
     except FileNotFoundError:
-        return False, "FFmpeg not found on the server"
+        return False, "FFmpeg not found"
 
     # ------------------------------------------------------------------
-    # Stage 2: Binary overlay patches
+    # Stage 2: Binary overlay patches (all scoped to correct atom boundaries)
     # ------------------------------------------------------------------
     try:
         with open(output_path, 'r+b') as f:
             data = bytearray(f.read())
             file_size = len(data)
-
             logger.info(f"Binary patching: {file_size:,} bytes")
 
-            # --- 1. FTYP safety net ---
+            # Locate moov boundaries once; all moov-internal searches use this.
+            moov = data.find(b'moov')
+            moov_end = file_size
+            if moov != -1 and moov >= 4:
+                moov_size = struct.unpack('>I', data[moov-4:moov])[0]
+                moov_end = moov - 4 + moov_size
+
+            # --- 1. FTYP ---
             ftyp = data.find(b'ftyp')
             if ftyp != -1:
                 data[ftyp+4:ftyp+8] = b'isom'
                 ftyp_box_size = struct.unpack('>I', data[ftyp-4:ftyp])[0]
                 if ftyp_box_size > 16:
                     data[ftyp+12:ftyp+16] = b'isom'
-                logger.info("FTYP verified: major -> 'isom', compatible -> 'isom'")
 
-            # --- 2. MDAT SIZE +1 (search for mdat AFTER moov to avoid false matches inside moov) ---
-            moov = data.find(b'moov')
-            mdat_search_start = 0
-            if moov != -1 and moov >= 4:
-                moov_size = struct.unpack('>I', data[moov-4:moov])[0]
-                mdat_search_start = moov - 4 + moov_size
-            mdat = data.find(b'mdat', mdat_search_start)
+            # --- 2. MDAT: corrupt TYPE field (original reference approach) ---
+            # Search for mdat AFTER moov to skip any false "mdat" bytes inside moov.
+            mdat = data.find(b'mdat', moov_end)
             if mdat >= 4:
-                current_size = struct.unpack('>I', data[mdat-4:mdat])[0]
-                new_size = current_size + 1
-                struct.pack_into('>I', data, mdat-4, new_size)
-                logger.info(f"MDAT size: {current_size:,} -> {new_size:,}")
+                # Read the 4-byte TYPE as an integer, add 1, write back.
+                # This corrupts the type (e.g. "mdat" -> "mdau") without changing box size,
+                # so box boundaries remain intact — safe with any atom layout.
+                current_val = struct.unpack('>I', data[mdat:mdat+4])[0]
+                struct.pack_into('>I', data, mdat, current_val + 1)
+                logger.info(f"MDAT type corrupted: 0x{current_val:08X} -> 0x{current_val+1:08X}")
 
-            # --- 3. STSZ: patch LAST occurrence within moov (video track) x10 ---
-            # Scope search to inside moov to avoid false matches inside mdat data.
+            # --- 3. STSZ: last occurrence within moov, inflate sample count x10 ---
             stsz_positions = []
-            moov = data.find(b'moov')
             if moov != -1 and moov >= 4:
-                moov_size = struct.unpack('>I', data[moov-4:moov])[0]
-                moov_end = moov - 4 + moov_size
                 pos = moov
                 while pos < moov_end - 4:
                     pos = data.find(b'stsz', pos)
@@ -104,37 +98,41 @@ def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", e
                     pos += 1
 
             if stsz_positions:
-                stsz_offset = stsz_positions[-1]
-                sample_count_off = stsz_offset + 16
-                current_count = struct.unpack('>I', data[sample_count_off:sample_count_off+4])[0]
-                new_count = current_count * 10
-                struct.pack_into('>I', data, sample_count_off, new_count)
-                logger.info(f"STSZ: count {current_count:,} -> {new_count:,}")
+                stsz_off = stsz_positions[-1]
+                cnt_off = stsz_off + 16
+                cur = struct.unpack('>I', data[cnt_off:cnt_off+4])[0]
+                struct.pack_into('>I', data, cnt_off, cur * 10)
+                logger.info(f"STSZ: count {cur:,} -> {cur*10:,}")
 
-                # --- 4. MVHD: zero dates + inflate duration x10 ---
+                # --- 4. MVHD ---
                 if moov != -1:
-                    mvhd = data.find(b'mvhd', moov)
-                    if mvhd != -1:
+                    moov_region = data[moov:moov_end]
+                    mvhd_rel = moov_region.find(b'mvhd')
+                    if mvhd_rel != -1:
+                        mvhd = moov + mvhd_rel
                         struct.pack_into('>I', data, mvhd + 12, 0)
                         struct.pack_into('>I', data, mvhd + 16, 0)
                         dur_off = mvhd + 24
-                        current_dur = struct.unpack('>I', data[dur_off:dur_off+4])[0]
-                        new_dur = current_dur * 10
-                        struct.pack_into('>I', data, dur_off, new_dur)
-                        logger.info(f"MVHD: dates zeroed, duration {current_dur} -> {new_dur}")
+                        cur_dur = struct.unpack('>I', data[dur_off:dur_off+4])[0]
+                        struct.pack_into('>I', data, dur_off, cur_dur * 10)
+                        logger.info(f"MVHD: dates zeroed, duration {cur_dur} -> {cur_dur*10}")
 
-            # --- 5. MDHD: set ALL track languages to 'und' ---
-            search_start = 0
-            mdhd_count = 0
-            while True:
-                mdhd = data.find(b'mdhd', search_start)
-                if mdhd == -1:
-                    break
-                struct.pack_into('>H', data, mdhd + 28, 0x51A3)
-                mdhd_count += 1
-                search_start = mdhd + 1
-            if mdhd_count:
-                logger.info(f"MDHD: language -> 'und' in {mdhd_count} track(s)")
+            # --- 5. MDHD: scope search to within moov only ---
+            if moov != -1 and moov >= 4:
+                # Use a sub-bytearray of just the moov atom region
+                moov_data = data[moov:moov_end]
+                mdhd_count = 0
+                search_pos = 0
+                while True:
+                    mdhd = moov_data.find(b'mdhd', search_pos)
+                    if mdhd == -1:
+                        break
+                    abs_mdhd = moov + mdhd
+                    struct.pack_into('>H', data, abs_mdhd + 28, 0x51A3)
+                    mdhd_count += 1
+                    search_pos = mdhd + 1
+                if mdhd_count:
+                    logger.info(f"MDHD: language -> 'und' in {mdhd_count} track(s)")
 
             f.seek(0)
             f.write(data)
