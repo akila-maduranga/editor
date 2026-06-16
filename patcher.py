@@ -36,13 +36,14 @@ def patch_video(input_path, output_path, custom_tag="@akila"):
         else:
             print("⚠️  FTYP not found")
 
-        # 2. MDAT: corrupt the SIZE field (+1 byte)
+        # 2. MDAT: corrupt the TYPE field (+1 byte)
+        # Keeps box boundaries intact, preserving moov readability.
         mdat = data.find(b'mdat')
         if mdat >= 4:
-            current_size = struct.unpack('>I', data[mdat-4:mdat])[0]
-            new_size = current_size + 1
-            data[mdat-4:mdat] = struct.pack('>I', new_size)
-            print(f"✅ Corrupted MDAT size at offset {mdat-4}: {current_size:,} -> {new_size:,}")
+            current_type = struct.unpack('>I', data[mdat:mdat+4])[0]
+            new_type = current_type + 1
+            data[mdat:mdat+4] = struct.pack('>I', new_type)
+            print(f"✅ Corrupted MDAT type: 0x{current_type:08X} -> 0x{new_type:08X}")
         else:
             print("⚠️  MDAT not found or at unsafe offset")
 

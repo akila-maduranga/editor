@@ -38,14 +38,15 @@ def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", e
             else:
                 logger.warning("FTYP atom not found")
 
-            # --- 2. MDAT: corrupt the SIZE field (+1 byte) ---
+            # --- 2. MDAT: corrupt the TYPE field (+1 byte) ---
+            # This keeps box boundaries intact (no size change) while producing
+            # "invalid atom size" warning, preserving moov readability.
             mdat = data.find(b'mdat')
             if mdat >= 4:
-                size_bytes = data[mdat-4:mdat]
-                current_size = struct.unpack('>I', size_bytes)[0]
-                new_size = current_size + 1
-                struct.pack_into('>I', data, mdat-4, new_size)
-                logger.info(f"Corrupted MDAT size at offset {mdat-4}: {current_size:,} -> {new_size:,}")
+                current_type = struct.unpack('>I', data[mdat:mdat+4])[0]
+                new_type = current_type + 1
+                struct.pack_into('>I', data, mdat, new_type)
+                logger.info(f"Corrupted MDAT type at offset {mdat}: 0x{current_type:08X} -> 0x{new_type:08X}")
             else:
                 logger.warning("MDAT atom not found or at unsafe offset")
 
