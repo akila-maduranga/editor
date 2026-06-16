@@ -65,6 +65,9 @@ async def api_patch_video(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     custom_tag: str = Form("@akila"),
+    title: str = Form(""),
+    artist: str = Form(""),
+    copyright: str = Form(""),
     encode_1080p: bool = Form(False)
 ):
     """
@@ -121,7 +124,7 @@ async def api_patch_video(
 
     # 3. Apply the patch
     logger.info(f"⚡ Starting metadata patch for '{filename}' with tag '{custom_tag}' (Size: {total_written} bytes)")
-    success, message = patch_video(input_path, output_path, custom_tag, encode_1080p)
+    success, message = patch_video(input_path, output_path, custom_tag=custom_tag, title=title, artist=artist, copyright=copyright, encode_1080p=encode_1080p)
 
     if not success:
         # Clean up input and return error

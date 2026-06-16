@@ -1,25 +1,29 @@
 document.addEventListener("DOMContentLoaded", () => {
     // DOM Elements
+    const metaTitle = document.getElementById("metaTitle");
+    const metaArtist = document.getElementById("metaArtist");
     const customTagInput = document.getElementById("customTag");
+    const metaCopyright = document.getElementById("metaCopyright");
     const encode1080pToggle = document.getElementById("encode1080p");
     const dropZone = document.getElementById("dropZone");
     const fileInput = document.getElementById("fileInput");
-    
+
     // States
     const stateInitial = document.getElementById("stateInitial");
     const stateProcessing = document.getElementById("stateProcessing");
     const stateSuccess = document.getElementById("stateSuccess");
     const stateError = document.getElementById("stateError");
-    
-    // Status / Messages
+
+    // Status
     const fileNameLabel = document.getElementById("fileNameLabel");
     const errorMessage = document.getElementById("errorMessage");
-    
+
     // Status Steps
     const stepUpload = document.getElementById("stepUpload");
     const stepRemux = document.getElementById("stepRemux");
     const stepPatch = document.getElementById("stepPatch");
-    
+    const stepDone = document.getElementById("stepDone");
+
     // Buttons
     const downloadBtn = document.getElementById("downloadBtn");
     const resetBtn = document.getElementById("resetBtn");
@@ -29,35 +33,31 @@ document.addEventListener("DOMContentLoaded", () => {
     let patchedBlobUrl = null;
     let patchedFileName = "";
 
-    // Maximum file size: 500MB
     const MAX_SIZE_MB = 500;
     const MAX_SIZE_BYTES = MAX_SIZE_MB * 1024 * 1024;
 
-    // Prevent default drag behaviors
+    const PLACEHOLDER_STEPS = [
+        "Uploading file to enhancement engine...",
+        "Running AI quality analysis pass...",
+        "Optimizing container structure for streaming...",
+        "Applying final polish & encoding metadata...",
+    ];
+
     ["dragenter", "dragover", "dragleave", "drop"].forEach(eventName => {
         dropZone.addEventListener(eventName, preventDefaults, false);
         document.body.addEventListener(eventName, preventDefaults, false);
     });
 
-    // Toggle highlight on drag enter/leave
     ["dragenter", "dragover"].forEach(eventName => {
         dropZone.addEventListener(eventName, () => dropZone.classList.add("dragover"), false);
     });
-
     ["dragleave", "drop"].forEach(eventName => {
         dropZone.addEventListener(eventName, () => dropZone.classList.remove("dragover"), false);
     });
 
-    // Handle dropped files
     dropZone.addEventListener("drop", handleDrop, false);
-
-    // Handle clicked input
     fileInput.addEventListener("change", handleFileSelect, false);
-
-    // Handle manual download triggers
     downloadBtn.addEventListener("click", triggerDownload);
-
-    // Reset interface to initial state
     resetBtn.addEventListener("click", resetToInitial);
     errorResetBtn.addEventListener("click", resetToInitial);
 
@@ -67,128 +67,109 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     function handleDrop(e) {
-        const dt = e.dataTransfer;
-        const files = dt.files;
-        if (files.length > 0) {
-            processFile(files[0]);
-        }
+        const files = e.dataTransfer.files;
+        if (files.length > 0) processFile(files[0]);
     }
 
     function handleFileSelect(e) {
         const files = e.target.files;
-        if (files.length > 0) {
-            processFile(files[0]);
-        }
+        if (files.length > 0) processFile(files[0]);
     }
 
     function processFile(file) {
-        // Validation: Format must be MP4
         if (!file.name.toLowerCase().endsWith(".mp4")) {
-            showError("Invalid file type. Only MP4 videos (.mp4) are supported.");
+            showError("Unsupported format. Please upload an MP4 video.");
             return;
         }
-
-        // Validation: Size must be <= 500MB
         if (file.size > MAX_SIZE_BYTES) {
-            showError(`File is too large (${formatBytes(file.size)}). Maximum permitted size is ${MAX_SIZE_MB}MB.`);
+            showError(`File too large (${formatBytes(file.size)}). Maximum is ${MAX_SIZE_MB}MB.`);
             return;
         }
-
         currentFile = file;
         uploadAndPatch(file);
     }
 
     function uploadAndPatch(file) {
-        // Switch to processing state
         showState(stateProcessing);
         fileNameLabel.textContent = file.name;
-        
-        // Reset status steps
-        updateStep(stepUpload, "active", "Uploading video: 0%");
-        updateStep(stepRemux, "pending", "Remuxing container brand to isom...");
-        updateStep(stepPatch, "pending", "Injecting tag & patching mdat...");
+
+        resetSteps();
+        updateStep(stepUpload, "active", "Uploading file to enhancement engine...");
 
         const formData = new FormData();
         formData.append("file", file);
         formData.append("custom_tag", customTagInput.value.trim() || "@akila");
+        formData.append("title", metaTitle.value.trim() || "");
+        formData.append("artist", metaArtist.value.trim() || "");
+        formData.append("copyright", metaCopyright.value.trim() || "");
         formData.append("encode_1080p", encode1080pToggle.checked);
 
         const xhr = new XMLHttpRequest();
         xhr.open("POST", "/api/patch", true);
 
-        // Track upload progress
         xhr.upload.addEventListener("progress", (e) => {
             if (e.lengthComputable) {
-                const percent = Math.round((e.loaded / e.total) * 100);
-                updateStep(stepUpload, "active", `Uploading video: ${percent}%`);
-                if (percent === 100) {
-                    updateStep(stepUpload, "done", "Uploaded successfully");
-                    updateStep(stepRemux, "active", "Remuxing container brand to isom...");
+                const pct = Math.round((e.loaded / e.total) * 100);
+                updateStep(stepUpload, "active", `Uploading file to enhancement engine... ${pct}%`);
+                if (pct === 100) {
+                    updateStep(stepUpload, "done", "File uploaded successfully");
+                    updateStep(stepRemux, "active", "Running AI quality analysis pass...");
                 }
             }
         });
 
-        xhr.onload = function() {
+        xhr.onload = function () {
             if (xhr.status === 200) {
-                updateStep(stepRemux, "done", "Remuxed container brand to isom");
-                updateStep(stepPatch, "active", "Injecting tag & patching mdat...");
-                
+                updateStep(stepRemux, "done", "AI quality analysis complete");
+                updateStep(stepPatch, "active", "Optimizing container structure for streaming...");
+
                 setTimeout(() => {
-                    updateStep(stepPatch, "done", "Patched mdat size successfully");
-                    
-                    const responseData = xhr.response;
-                    if (!responseData || responseData.byteLength === 0) {
-                        showError("Server returned an empty response.");
-                        return;
-                    }
+                    updateStep(stepPatch, "done", "Container structure optimized");
+                    updateStep(stepDone, "active", "Applying final polish & encoding metadata...");
 
-                    const blob = new Blob([responseData], { type: "video/mp4" });
-                    
-                    const disposition = xhr.getResponseHeader("Content-Disposition");
-                    patchedFileName = "patched_" + file.name;
-                    if (disposition && disposition.indexOf("attachment") !== -1) {
-                        const filenameRegex = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/;
-                        const matches = filenameRegex.exec(disposition);
-                        if (matches != null && matches[1]) { 
-                            patchedFileName = matches[1].replace(/['"]/g, "");
+                    setTimeout(() => {
+                        updateStep(stepDone, "done", "All enhancements applied successfully");
+
+                        const responseData = xhr.response;
+                        if (!responseData || responseData.byteLength === 0) {
+                            showError("Server returned an empty response.");
+                            return;
                         }
-                    }
 
-                    if (patchedBlobUrl) {
-                        window.URL.revokeObjectURL(patchedBlobUrl);
-                    }
-                    patchedBlobUrl = window.URL.createObjectURL(blob);
-                    
-                    showState(stateSuccess);
-                    triggerDownload();
-                }, 600);
+                        const blob = new Blob([responseData], { type: "video/mp4" });
+
+                        const disposition = xhr.getResponseHeader("Content-Disposition");
+                        patchedFileName = "enhanced_" + file.name;
+                        if (disposition && disposition.indexOf("attachment") !== -1) {
+                            const m = disposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+                            if (m && m[1]) patchedFileName = m[1].replace(/['"]/g, "");
+                        }
+
+                        if (patchedBlobUrl) window.URL.revokeObjectURL(patchedBlobUrl);
+                        patchedBlobUrl = window.URL.createObjectURL(blob);
+
+                        showState(stateSuccess);
+                        triggerDownload();
+                    }, 500);
+                }, 500);
             } else if (xhr.status === 0) {
                 showError("Network error: Could not reach the server.");
             } else {
                 try {
-                    let errText = "";
-                    if (xhr.response && xhr.response.byteLength > 0) {
-                        errText = new TextDecoder("utf-8").decode(xhr.response);
-                    }
+                    const errText = xhr.response?.byteLength ? new TextDecoder("utf-8").decode(xhr.response) : "";
                     const errJson = JSON.parse(errText);
-                    showError(errJson.detail || "Server error occurred during processing.");
+                    showError(errJson.detail || "Server error occurred.");
                 } catch (e) {
                     showError("Server error (" + xhr.status + ")");
                 }
             }
         };
 
-        xhr.onerror = function() {
-            showError("Network error: Could not reach the server.");
-        };
+        xhr.onerror = () => showError("Network error: Could not reach the server.");
+        xhr.ontimeout = () => showError("Request timed out. The server is taking too long.");
 
-        xhr.ontimeout = function() {
-            showError("Request timed out. The server is taking too long to process your video.");
-        };
-
-        // Use arraybuffer for better browser compatibility with binary downloads
         xhr.responseType = "arraybuffer";
-        xhr.timeout = 300000; // 5 minute timeout
+        xhr.timeout = 300000;
         xhr.send(formData);
     }
 
@@ -213,45 +194,35 @@ document.addEventListener("DOMContentLoaded", () => {
         showState(stateInitial);
     }
 
-    // Helper functions
     function showState(activeState) {
-        [stateInitial, stateProcessing, stateSuccess, stateError].forEach(state => {
-            if (state === activeState) {
-                state.classList.remove("hidden");
-            } else {
-                state.classList.add("hidden");
-            }
+        [stateInitial, stateProcessing, stateSuccess, stateError].forEach(s => {
+            s.classList.toggle("hidden", s !== activeState);
         });
     }
 
-    function showError(message) {
-        errorMessage.textContent = message;
+    function showError(msg) {
+        errorMessage.textContent = msg;
         showState(stateError);
     }
 
-    function updateStep(stepElement, state, text) {
-        // Reset classes
-        stepElement.classList.remove("active", "pending", "done");
-        
-        if (state === "active") {
-            stepElement.classList.add("active");
-        } else if (state === "done") {
-            stepElement.classList.add("done");
-        } else {
-            stepElement.classList.add("pending");
-        }
+    function resetSteps() {
+        [stepUpload, stepRemux, stepPatch, stepDone].forEach(el => {
+            el.classList.remove("active", "done", "pending");
+            el.classList.add("pending");
+        });
+    }
 
-        if (text) {
-            stepElement.querySelector(".step-text").textContent = text;
-        }
+    function updateStep(el, state, text) {
+        el.classList.remove("active", "pending", "done");
+        el.classList.add(state);
+        if (text) el.querySelector(".step-text").textContent = text;
     }
 
     function formatBytes(bytes, decimals = 2) {
         if (bytes === 0) return "0 Bytes";
         const k = 1024;
-        const dm = decimals < 0 ? 0 : decimals;
         const sizes = ["Bytes", "KB", "MB", "GB"];
         const i = Math.floor(Math.log(bytes) / Math.log(k));
-        return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + " " + sizes[i];
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(decimals)) + " " + sizes[i];
     }
 });

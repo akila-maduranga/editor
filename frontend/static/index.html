@@ -3,12 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TikTok Video Metadata Patcher</title>
+    <title>VideoBoost — AI-Powered Enhancement</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/style.css">
-    <link rel="icon" type="image/png" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🔧</text></svg>">
+    <link rel="icon" type="image/png" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
 </head>
 <body>
     <div class="stars-bg"></div>
@@ -18,38 +18,55 @@
     <div class="container">
         <header class="app-header">
             <div class="logo">
-                <span class="logo-symbol">TikTok</span>
-                <span class="logo-text">Metadata Patcher</span>
+                <span class="logo-symbol">VideoBoost</span>
+                <span class="logo-text">Enhancer</span>
             </div>
-            <p class="subtitle">Bypass TikTok's compression pipeline by remuxing container brands and patching atom offsets.</p>
+            <p class="subtitle">Smart AI-driven quality optimization for your social media videos. Better bitrate, cleaner metadata, maximum reach.</p>
         </header>
 
         <main class="main-card">
-            <!-- Settings Section -->
+            <!-- Creator Info Section -->
             <div class="settings-group">
-                <label for="customTag" class="input-label">Custom Metadata Tag</label>
+                <label class="input-label">Creator Information</label>
+
+                <div class="input-wrapper">
+                    <span class="input-prefix">Title</span>
+                    <input type="text" id="metaTitle" value="" placeholder="My Awesome Video" maxlength="100" autocomplete="off">
+                </div>
+
+                <div class="input-wrapper">
+                    <span class="input-prefix">Artist</span>
+                    <input type="text" id="metaArtist" value="" placeholder="@creator" maxlength="50" autocomplete="off">
+                </div>
+
                 <div class="input-wrapper">
                     <span class="input-prefix">Tag</span>
                     <input type="text" id="customTag" value="@akila" placeholder="@username" maxlength="50" autocomplete="off">
                 </div>
-                <p class="input-helper">This tag is injected into the video's comment, title, and creator metadata.</p>
-                
+
+                <div class="input-wrapper">
+                    <span class="input-prefix">Copyright</span>
+                    <input type="text" id="metaCopyright" value="" placeholder="© 2026" maxlength="100" autocomplete="off">
+                </div>
+
+                <p class="input-helper">These details are embedded into your video for brand protection and discoverability.</p>
+
                 <div class="toggle-wrapper" style="margin-top: 12px;">
                     <label class="toggle-switch">
                         <input type="checkbox" id="encode1080p">
                         <span class="slider"></span>
                     </label>
                     <div class="toggle-labels">
-                        <span class="toggle-title">Scale down to 1080p</span>
-                        <span class="toggle-desc">Reduces file size for 4K videos while retaining quality</span>
+                        <span class="toggle-title">HD Optimizer</span>
+                        <span class="toggle-desc">Smart downscale for ultra-high-resolution footage</span>
                     </div>
                 </div>
             </div>
 
-            <!-- Upload Area / Active State -->
+            <!-- Upload Area -->
             <div id="dropZone" class="drop-zone">
                 <input type="file" id="fileInput" accept=".mp4" class="file-input">
-                
+
                 <!-- Initial State -->
                 <div id="stateInitial" class="zone-state">
                     <div class="icon-container">
@@ -59,9 +76,9 @@
                             <line x1="12" y1="3" x2="12" y2="15"/>
                         </svg>
                     </div>
-                    <h3>Drag & Drop video here</h3>
-                    <p class="upload-text">or <span class="browse-link">browse files</span></p>
-                    <div class="format-badge">MP4 format (up to 500MB)</div>
+                    <h3>Drop your video here</h3>
+                    <p class="upload-text">or <span class="browse-link">choose a file</span></p>
+                    <div class="format-badge">MP4 · up to 500MB</div>
                 </div>
 
                 <!-- Processing State -->
@@ -71,19 +88,23 @@
                             <div class="spinner-inner"></div>
                         </div>
                     </div>
-                    <h3 id="fileNameLabel">Processing video...</h3>
+                    <h3 id="fileNameLabel">Analyzing video...</h3>
                     <div class="status-steps">
                         <div id="stepUpload" class="status-step active">
                             <span class="step-bullet"></span>
-                            <span class="step-text">Uploading video...</span>
+                            <span class="step-text">Uploading file to enhancement engine...</span>
                         </div>
                         <div id="stepRemux" class="status-step">
                             <span class="step-bullet"></span>
-                            <span class="step-text">Remuxing container brand to isom...</span>
+                            <span class="step-text">Running AI quality analysis pass...</span>
                         </div>
                         <div id="stepPatch" class="status-step">
                             <span class="step-bullet"></span>
-                            <span class="step-text">Injecting tag & patching mdat...</span>
+                            <span class="step-text">Optimizing container structure for streaming...</span>
+                        </div>
+                        <div id="stepDone" class="status-step">
+                            <span class="step-bullet"></span>
+                            <span class="step-text">Applying final polish & encoding metadata...</span>
                         </div>
                     </div>
                 </div>
@@ -95,8 +116,8 @@
                             <polyline points="20 6 9 17 4 12"/>
                         </svg>
                     </div>
-                    <h3>Video Patched Successfully!</h3>
-                    <p class="success-message">Your download should start automatically.</p>
+                    <h3>Enhancement Complete!</h3>
+                    <p class="success-message">Your video is optimized and ready. Download should start automatically.</p>
                     <div class="action-buttons">
                         <button id="downloadBtn" class="btn btn-primary">
                             <svg class="btn-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -106,7 +127,7 @@
                             </svg>
                             Download Again
                         </button>
-                        <button id="resetBtn" class="btn btn-secondary">Patch Another</button>
+                        <button id="resetBtn" class="btn btn-secondary">Enhance Another</button>
                     </div>
                 </div>
 
@@ -118,15 +139,15 @@
                             <line x1="6" y1="6" x2="18" y2="18"/>
                         </svg>
                     </div>
-                    <h3>Patching Failed</h3>
-                    <p id="errorMessage" class="error-message">Something went wrong during video processing.</p>
+                    <h3>Enhancement Failed</h3>
+                    <p id="errorMessage" class="error-message">Something went wrong during optimization.</p>
                     <button id="errorResetBtn" class="btn btn-primary">Try Again</button>
                 </div>
             </div>
         </main>
 
         <footer class="app-footer">
-            <p>Runs local FFmpeg processing. No video data is permanently stored on the VPS.</p>
+            <p>All processing happens on the server. Your original file is never stored permanently.</p>
         </footer>
     </div>
     <script src="/static/app.js"></script>

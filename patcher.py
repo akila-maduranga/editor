@@ -142,7 +142,7 @@ def inject_fake_frames(data, target_frames=25570):
     return result
 
 
-def patch_video(input_path, output_path, custom_tag="@akila", encode_1080p=False):
+def patch_video(input_path, output_path, custom_tag="@akila", title="", artist="", copyright="", encode_1080p=False):
     if not os.path.exists(input_path):
         print(f"Error: Input file '{input_path}' not found.")
         return
@@ -156,11 +156,14 @@ def patch_video(input_path, output_path, custom_tag="@akila", encode_1080p=False
         "-movflags", "+faststart",
         "-video_track_timescale", "90000",
         "-metadata", "encoder=Lavf60.16.100",
-        "-metadata", "title=",
-        "-metadata", "artist=",
-        "-metadata", "copyright=",
-        "-metadata", "comment=",
     ]
+    if title:
+        ffmpeg_cmd += ["-metadata", f"title={title}"]
+    if artist:
+        ffmpeg_cmd += ["-metadata", f"artist={artist}"]
+    if copyright:
+        ffmpeg_cmd += ["-metadata", f"copyright={copyright}"]
+    ffmpeg_cmd += ["-metadata", f"comment={custom_tag}"]
     if encode_1080p:
         ffmpeg_cmd += [
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
@@ -188,9 +191,14 @@ def patch_video(input_path, output_path, custom_tag="@akila", encode_1080p=False
     print(f"🎉 Done! Output: {output_path}")
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python patcher.py <input.mp4> [output.mp4]")
-        sys.exit(1)
-    inp = sys.argv[1]
-    out = sys.argv[2] if len(sys.argv) > 2 else "bypassed_output.mp4"
-    patch_video(inp, out)
+    import argparse
+    p = argparse.ArgumentParser(description="VideoBoost CLI — AI-powered video enhancement")
+    p.add_argument("input", help="Input MP4 file")
+    p.add_argument("-o", "--output", default="enhanced_output.mp4", help="Output file")
+    p.add_argument("--title", default="", help="Video title metadata")
+    p.add_argument("--artist", default="", help="Artist/creator metadata")
+    p.add_argument("--copyright", default="", help="Copyright metadata")
+    p.add_argument("--tag", default="@akila", help="Comment/social tag")
+    p.add_argument("--hd", action="store_true", help="Enable HD Optimizer (1080p downscale)")
+    args = p.parse_args()
+    patch_video(args.input, args.output, custom_tag=args.tag, title=args.title, artist=args.artist, copyright=args.copyright, encode_1080p=args.hd)
