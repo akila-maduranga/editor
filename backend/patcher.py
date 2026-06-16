@@ -75,23 +75,33 @@ def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", e
                     data[ftyp+12:ftyp+16] = b'isom'
                 logger.info("FTYP verified: major -> 'isom', compatible -> 'isom'")
 
-            # --- 2. MDAT SIZE +1 (safe with faststart — extends into EOF) ---
-            mdat = data.find(b'mdat')
+            # --- 2. MDAT SIZE +1 (search for mdat AFTER moov to avoid false matches inside moov) ---
+            moov = data.find(b'moov')
+            mdat_search_start = 0
+            if moov != -1 and moov >= 4:
+                moov_size = struct.unpack('>I', data[moov-4:moov])[0]
+                mdat_search_start = moov - 4 + moov_size
+            mdat = data.find(b'mdat', mdat_search_start)
             if mdat >= 4:
                 current_size = struct.unpack('>I', data[mdat-4:mdat])[0]
                 new_size = current_size + 1
                 struct.pack_into('>I', data, mdat-4, new_size)
                 logger.info(f"MDAT size: {current_size:,} -> {new_size:,}")
 
-            # --- 3. STSZ: patch LAST occurrence (video track) x10 ---
+            # --- 3. STSZ: patch LAST occurrence within moov (video track) x10 ---
+            # Scope search to inside moov to avoid false matches inside mdat data.
             stsz_positions = []
-            pos = 0
-            while pos < len(data) - 4:
-                pos = data.find(b'stsz', pos)
-                if pos == -1:
-                    break
-                stsz_positions.append(pos)
-                pos += 1
+            moov = data.find(b'moov')
+            if moov != -1 and moov >= 4:
+                moov_size = struct.unpack('>I', data[moov-4:moov])[0]
+                moov_end = moov - 4 + moov_size
+                pos = moov
+                while pos < moov_end - 4:
+                    pos = data.find(b'stsz', pos)
+                    if pos == -1 or pos >= moov_end:
+                        break
+                    stsz_positions.append(pos)
+                    pos += 1
 
             if stsz_positions:
                 stsz_offset = stsz_positions[-1]
@@ -102,7 +112,6 @@ def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", e
                 logger.info(f"STSZ: count {current_count:,} -> {new_count:,}")
 
                 # --- 4. MVHD: zero dates + inflate duration x10 ---
-                moov = data.find(b'moov')
                 if moov != -1:
                     mvhd = data.find(b'mvhd', moov)
                     if mvhd != -1:
