@@ -24,9 +24,15 @@ def patch_video(input_path, output_path, custom_tag="@akila"):
         # 1. FTYP: major brand + first compatible brand
         ftyp = data.find(b'ftyp')
         if ftyp != -1:
-            data[ftyp+8:ftyp+12] = b'isom'
-            data[ftyp+16:ftyp+20] = b'isom'
-            print("✅ Patched FTYP: major brand -> 'isom', first compatible -> 'isom'")
+            # ftyp points to type string; ftyp-4=box start, ftyp+4=major_brand,
+            # ftyp+8=minor_version, ftyp+12=first compatible_brand
+            ftyp_box_size = struct.unpack('>I', data[ftyp-4:ftyp])[0]
+            data[ftyp+4:ftyp+8] = b'isom'
+            if ftyp_box_size > 16:
+                data[ftyp+12:ftyp+16] = b'isom'
+                print("✅ Patched FTYP: major brand -> 'isom', first compatible -> 'isom'")
+            else:
+                print("✅ Patched FTYP: major brand -> 'isom'")
         else:
             print("⚠️  FTYP not found")
 

@@ -25,9 +25,16 @@ def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", e
             # --- 1. FTYP: major brand + first compatible brand ---
             ftyp = data.find(b'ftyp')
             if ftyp != -1:
-                data[ftyp+8:ftyp+12] = b'isom'
-                data[ftyp+16:ftyp+20] = b'isom'
-                logger.info("Patched FTYP: major brand -> 'isom', first compatible -> 'isom'")
+                # ftyp points to the type string ("ftyp"), so:
+                # ftyp-4 = box start, ftyp+4 = major_brand, ftyp+8 = minor_version
+                # ftyp+12 = first compatible_brand, etc.
+                ftyp_box_size = struct.unpack('>I', data[ftyp-4:ftyp])[0]
+                data[ftyp+4:ftyp+8] = b'isom'
+                if ftyp_box_size > 16:
+                    data[ftyp+12:ftyp+16] = b'isom'
+                    logger.info("Patched FTYP: major brand -> 'isom', first compatible -> 'isom'")
+                else:
+                    logger.info("Patched FTYP: major brand -> 'isom' (no compatible brands to patch)")
             else:
                 logger.warning("FTYP atom not found")
 
