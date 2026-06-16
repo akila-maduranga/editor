@@ -1,0 +1,11 @@
+version: '3.8'
+
+services:
+  tiktok-patcher:
+    build: .
+    container_name: tiktok-patcher
+    ports:
+      - "8000:8000"
+    environment:
+      - MAX_UPLOAD_SIZE_MB=500
+    restart: unless-stopped

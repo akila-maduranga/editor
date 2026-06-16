@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TikTok Video Metadata Patcher</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="icon" type="image/png" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🔧</text></svg>">
+</head>
+<body>
+    <div class="stars-bg"></div>
+    <div class="glow-orb orb-1"></div>
+    <div class="glow-orb orb-2"></div>
+
+    <div class="container">
+        <header class="app-header">
+            <div class="logo">
+                <span class="logo-symbol">TikTok</span>
+                <span class="logo-text">Metadata Patcher</span>
+            </div>
+            <p class="subtitle">Bypass TikTok's compression pipeline by remuxing container brands and patching atom offsets.</p>
+        </header>
+
+        <main class="main-card">
+            <!-- Settings Section -->
+            <div class="settings-group">
+                <label for="customTag" class="input-label">Custom Metadata Tag</label>
+                <div class="input-wrapper">
+                    <span class="input-prefix">Tag</span>
+                    <input type="text" id="customTag" value="@akila" placeholder="@username" maxlength="50" autocomplete="off">
+                </div>
+                <p class="input-helper">This tag is injected into the video's comment, title, and creator metadata.</p>
+            </div>
+
+            <!-- Upload Area / Active State -->
+            <div id="dropZone" class="drop-zone">
+                <input type="file" id="fileInput" accept=".mp4" class="file-input">
+                
+                <!-- Initial State -->
+                <div id="stateInitial" class="zone-state">
+                    <div class="icon-container">
+                        <svg class="upload-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                            <polyline points="17 8 12 3 7 8"/>
+                            <line x1="12" y1="3" x2="12" y2="15"/>
+                        </svg>
+                    </div>
+                    <h3>Drag & Drop video here</h3>
+                    <p class="upload-text">or <span class="browse-link">browse files</span></p>
+                    <div class="format-badge">MP4 format (up to 500MB)</div>
+                </div>
+
+                <!-- Processing State -->
+                <div id="stateProcessing" class="zone-state hidden">
+                    <div class="loader-container">
+                        <div class="spinner">
+                            <div class="spinner-inner"></div>
+                        </div>
+                    </div>
+                    <h3 id="fileNameLabel">Processing video...</h3>
+                    <div class="status-steps">
+                        <div id="stepUpload" class="status-step active">
+                            <span class="step-bullet"></span>
+                            <span class="step-text">Uploading video...</span>
+                        </div>
+                        <div id="stepRemux" class="status-step">
+                            <span class="step-bullet"></span>
+                            <span class="step-text">Remuxing container brand to isom...</span>
+                        </div>
+                        <div id="stepPatch" class="status-step">
+                            <span class="step-bullet"></span>
+                            <span class="step-text">Injecting tag & patching mdat...</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Success State -->
+                <div id="stateSuccess" class="zone-state hidden">
+                    <div class="success-icon-container">
+                        <svg class="success-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                            <polyline points="20 6 9 17 4 12"/>
+                        </svg>
+                    </div>
+                    <h3>Video Patched Successfully!</h3>
+                    <p class="success-message">Your download should start automatically.</p>
+                    <div class="action-buttons">
+                        <button id="downloadBtn" class="btn btn-primary">
+                            <svg class="btn-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                                <polyline points="7 10 12 15 17 10"/>
+                                <line x1="12" y1="15" x2="12" y2="3"/>
+                            </svg>
+                            Download Again
+                        </button>
+                        <button id="resetBtn" class="btn btn-secondary">Patch Another</button>
+                    </div>
+                </div>
+
+                <!-- Error State -->
+                <div id="stateError" class="zone-state hidden">
+                    <div class="error-icon-container">
+                        <svg class="error-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="18" y1="6" x2="6" y2="18"/>
+                            <line x1="6" y1="6" x2="18" y2="18"/>
+                        </svg>
+                    </div>
+                    <h3>Patching Failed</h3>
+                    <p id="errorMessage" class="error-message">Something went wrong during video processing.</p>
+                    <button id="errorResetBtn" class="btn btn-primary">Try Again</button>
+                </div>
+            </div>
+        </main>
+
+        <footer class="app-footer">
+            <p>Runs local FFmpeg processing. No video data is permanently stored on the VPS.</p>
+        </footer>
+    </div>
+    <script src="/static/app.js"></script>
+</body>
+</html>
