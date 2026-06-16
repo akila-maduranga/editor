@@ -1,7 +1,8 @@
 import os
 import uuid
 import logging
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks, Request, status, BackgroundTask
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks, Request, status
+from starlette.background import BackgroundTask
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
