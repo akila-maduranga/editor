@@ -26,7 +26,8 @@ def patch_video(input_path, output_path, custom_tag="@akila"):
     # -brand isom           : Set major brand to ISO Base Media (generic)
     # -compatible_brands    : Set compatible brands to match TikTok's preferences
     # -metadata ...         : Inject our custom tags
-    # -movflags +faststart  : Move 'moov' atom to the front (like your patched file)
+    # NOTE: Do NOT use +faststart. moov must stay at end of file for
+    #       the mdat corruption to produce "invalid atom size".
     # ---------------------------------------------------------------------
     cmd = [
         "ffmpeg",
@@ -38,8 +39,7 @@ def patch_video(input_path, output_path, custom_tag="@akila"):
         "-metadata", f"comment=Patched by {custom_tag} - 120fps Optimized",
         "-metadata", "encoder=Lavf60.16.100",
         "-metadata", f"title=fixed_by_{custom_tag.replace('@', '')}",
-        "-metadata:s:a:0", "language=und",   # Set audio language to 'und' (undefined)
-        "-movflags", "+faststart",
+        "-metadata:s:a:0", "language=und",
         temp_path
     ]
 
@@ -53,17 +53,35 @@ def patch_video(input_path, output_path, custom_tag="@akila"):
         return
 
     # ---------------------------------------------------------------------
-    # STEP 2: Binary Patch - Corrupt 'mdat' atom size to trigger invalid trailer
+    # STEP 2: Binary Patches - Inflate stsz frame count + corrupt mdat size
     # ---------------------------------------------------------------------
-    # The patched file had: "Warning: Unknown trailer with invalid atom size"
-    # We replicate this by increasing the declared 'mdat' size by 1 byte.
-    # Media players ignore this and read until EOF, but TikTok's parser
-    # gets confused and skips re-encoding.
+    # The real exploit: inflating stsz sample count 10x tricks TikTok's
+    # encoder into seeing ~1200 fps, hitting a safety threshold that skips
+    # re-encoding. The mdat +1 creates a secondary "invalid atom size" flag.
     # ---------------------------------------------------------------------
     with open(temp_path, 'rb') as f:
         data = bytearray(f.read())
 
-    # Parse top-level atoms to find 'mdat'
+    # --- 2a. Inflate ALL stsz sample counts 10x ---
+    stsz_patched = 0
+    search_start = 0
+    while True:
+        stsz_offset = data.find(b'stsz', search_start)
+        if stsz_offset == -1:
+            break
+        sample_count_off = stsz_offset + 16
+        current_count = struct.unpack('>I', data[sample_count_off:sample_count_off+4])[0]
+        new_count = current_count * 10
+        struct.pack_into('>I', data, sample_count_off, new_count)
+        print(f"✅ Found 'stsz' at offset {stsz_offset}, count: {current_count} -> {new_count}")
+        stsz_patched += 1
+        search_start = stsz_offset + 4
+    if stsz_patched == 0:
+        print("⚠️  Warning: Could not find any 'stsz' atom.")
+    else:
+        print(f"💪 Patched {stsz_patched} stsz atom(s)")
+
+    # --- 2b. Corrupt mdat declared size (+1 byte) ---
     index = 0
     mdat_offset = -1
     mdat_size = 0
@@ -77,7 +95,6 @@ def patch_video(input_path, output_path, custom_tag="@akila"):
             mdat_size = atom_size
             break
         
-        # Safety: if size is 0 or 1, we can't advance properly
         if atom_size < 8:
             break
         
@@ -85,23 +102,17 @@ def patch_video(input_path, output_path, custom_tag="@akila"):
         if index >= len(data):
             break
 
-    if mdat_offset == -1:
-        print("⚠️  Warning: Could not find 'mdat' atom. Skipping binary patch.")
-        # Still copy the temp file to output
-        os.rename(temp_path, output_path)
-    else:
-        # Increase the declared size by exactly 1 byte
+    if mdat_offset != -1:
         new_size = mdat_size + 1
-        print(f"✅ Found 'mdat' at offset {mdat_offset}")
-        print(f"   Old declared size: {mdat_size} bytes")
-        print(f"   New declared size: {new_size} bytes (injected invalid trailer)")
-
         struct.pack_into('>I', data, mdat_offset, new_size)
+        print(f"✅ Corrupted 'mdat' at offset {mdat_offset}, size: {mdat_size} -> {new_size}")
+    else:
+        print("⚠️  Warning: Could not find 'mdat' atom.")
 
-        # Write the patched binary to the final output
-        with open(output_path, 'wb') as f:
-            f.write(data)
-        print(f"💾 Binary patch applied successfully!")
+    # Write the patched binary to the final output
+    with open(output_path, 'wb') as f:
+        f.write(data)
+    print(f"💾 Binary patches applied successfully!")
 
     # Clean up temporary file
     if os.path.exists(temp_path) and temp_path != output_path:
