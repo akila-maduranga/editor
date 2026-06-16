@@ -84,7 +84,7 @@ def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", e
     cmd.extend([
         "-map_metadata", "-1",
         "-brand", "isom",
-        "-compatible_brands", "isomiso2avc1mp41",
+        "-metadata", "compatible_brands=isomiso2avc1mp41",
         "-metadata", f"comment=Patched by {custom_tag} - 120fps Optimized",
         "-metadata", "encoder=Lavf60.16.100",
         "-metadata", f"title=fixed_by_{custom_tag.replace('@', '')}",
