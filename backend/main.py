@@ -2,7 +2,6 @@ import os
 import uuid
 import logging
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks, Request, status
-from starlette.background import BackgroundTask
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -133,19 +132,20 @@ async def api_patch_video(
             detail=f"Patching failed: {message}"
         )
 
-    # 4. Schedule background cleanup of input file only (output cleaned after response)
-    background_tasks.add_task(cleanup_files, input_path)
-
-    # 5. Build friendly output filename
+    # 4. Build friendly output filename
     base_name, ext = os.path.splitext(filename)
     download_filename = f"{base_name}_patched{ext}"
 
     logger.info(f"🎉 Patching complete. Sending file: {download_filename}")
+    
+    # Schedule cleanup of input file
+    background_tasks.add_task(cleanup_files, input_path)
+    
+    # Return file without cleanup (cleanup will be handled separately)
     return FileResponse(
         path=output_path,
         filename=download_filename,
-        media_type="video/mp4",
-        background=BackgroundTask(cleanup_files, output_path)
+        media_type="video/mp4"
     )
 
 # Serve static files (styles, script, icons)
