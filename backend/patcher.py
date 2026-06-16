@@ -2,13 +2,33 @@ import subprocess
 import os
 import struct
 import logging
+import json
 
 logger = logging.getLogger("tiktok_patcher")
 
-def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila") -> tuple[bool, str]:
+def get_video_info(input_path: str) -> dict:
+    """Uses ffprobe to get video stream details."""
+    cmd = [
+        "ffprobe",
+        "-v", "error",
+        "-select_streams", "v:0",
+        "-show_entries", "stream=width,height,bit_rate",
+        "-of", "json",
+        input_path
+    ]
+    try:
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        data = json.loads(result.stdout)
+        if data.get("streams"):
+            return data["streams"][0]
+    except Exception as e:
+        logger.warning(f"ffprobe failed: {e}")
+    return {}
+
+def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", encode_1080p: bool = False) -> tuple[bool, str]:
     """
     Patches an MP4 video to bypass TikTok compression by:
-    1. Remuxing with FFmpeg (no re-encode).
+    1. Remuxing (or encoding) with FFmpeg.
     2. Changing container brand to 'isom'.
     3. Injecting custom metadata.
     4. Slightly corrupting the 'mdat' atom size to trigger a parser fallback.
@@ -22,13 +42,46 @@ def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila") -
     temp_path = f"{output_path}.temp.mp4"
 
     # ---------------------------------------------------------------------
-    # STEP 1: FFmpeg Remux - Strip old metadata, inject new ones
+    # STEP 1: FFmpeg Remux / Encode - Strip old metadata, inject new ones
     # ---------------------------------------------------------------------
     cmd = [
         "ffmpeg",
         "-y",                   # Overwrite output file if it exists
-        "-i", input_path,
-        "-c", "copy",
+        "-i", input_path
+    ]
+
+    needs_encoding = False
+    if encode_1080p:
+        info = get_video_info(input_path)
+        width = int(info.get("width", 0))
+        height = int(info.get("height", 0))
+        
+        # Check if height or width exceeds 1080p bounds
+        if max(width, height) > 1920 or min(width, height) > 1080:
+            needs_encoding = True
+            logger.info(f"Video resolution {width}x{height} exceeds 1080p. Downscaling...")
+            
+            cmd.extend([
+                "-c:v", "libx264",
+                "-preset", "fast",
+                "-crf", "23",
+                "-vf", "scale='min(1920,iw)':min'(1080,ih)':force_original_aspect_ratio=decrease",
+                "-c:a", "copy"
+            ])
+            
+            # Try to cap bitrate if known
+            bitrate = info.get("bit_rate")
+            if bitrate:
+                # Add 10% buffer
+                maxrate = int(int(bitrate) * 1.1)
+                cmd.extend(["-maxrate", str(maxrate), "-bufsize", str(maxrate * 2)])
+        else:
+            logger.info(f"Video resolution {width}x{height} is 1080p or below. Copying stream...")
+            cmd.extend(["-c", "copy"])
+    else:
+        cmd.extend(["-c", "copy"])
+
+    cmd.extend([
         "-map_metadata", "-1",
         "-brand", "isom",
         "-compatible_brands", "isomiso2avc1mp41",
@@ -38,7 +91,7 @@ def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila") -
         "-metadata:s:a:0", "language=und",   # Set audio language to 'und' (undefined)
         "-movflags", "+faststart",
         temp_path
-    ]
+    ])
 
     logger.info("🔧 Running FFmpeg remux...")
     logger.info(f"Command: {' '.join(cmd)}")

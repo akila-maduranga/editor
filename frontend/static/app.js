@@ -1,6 +1,7 @@
 document.addEventListener("DOMContentLoaded", () => {
     // DOM Elements
     const customTagInput = document.getElementById("customTag");
+    const encode1080pToggle = document.getElementById("encode1080p");
     const dropZone = document.getElementById("dropZone");
     const fileInput = document.getElementById("fileInput");
     
@@ -110,6 +111,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const formData = new FormData();
         formData.append("file", file);
         formData.append("custom_tag", customTagInput.value.trim() || "@akila");
+        formData.append("encode_1080p", encode1080pToggle.checked);
 
         const xhr = new XMLHttpRequest();
         xhr.open("POST", "/api/patch", true);

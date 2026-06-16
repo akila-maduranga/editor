@@ -64,7 +64,8 @@ async def api_patch_video(
     request: Request,
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    custom_tag: str = Form("@akila")
+    custom_tag: str = Form("@akila"),
+    encode_1080p: bool = Form(False)
 ):
     """
     Uploads a video, runs the patcher script, and returns the patched output.
@@ -120,7 +121,7 @@ async def api_patch_video(
 
     # 3. Apply the patch
     logger.info(f"⚡ Starting metadata patch for '{filename}' with tag '{custom_tag}' (Size: {total_written} bytes)")
-    success, message = patch_video(input_path, output_path, custom_tag)
+    success, message = patch_video(input_path, output_path, custom_tag, encode_1080p)
 
     if not success:
         # Clean up input and return error
