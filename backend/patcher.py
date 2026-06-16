@@ -4,6 +4,7 @@ import struct
 import logging
 import json
 import shutil
+import mmap
 
 logger = logging.getLogger("tiktok_patcher")
 
@@ -89,52 +90,53 @@ def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", e
     logger.info("Applying binary atom patches...")
     try:
         with open(temp_path, 'r+b') as f:
-            data = bytearray(f.read())
+            # Memory map the file to prevent OOM crashes on large files
+            mm = mmap.mmap(f.fileno(), 0)
             
             # 1. PATCH FTYP
-            ftyp_offset = data.find(b'ftyp')
+            ftyp_offset = mm.find(b'ftyp')
             if ftyp_offset != -1:
-                data[ftyp_offset+4:ftyp_offset+8] = b'isom'
+                mm[ftyp_offset+4:ftyp_offset+8] = b'isom'
                 
             # 2. PATCH MVHD
-            moov_offset = data.find(b'moov')
+            moov_offset = mm.find(b'moov')
             if moov_offset != -1:
-                mvhd_offset = data.find(b'mvhd', moov_offset)
+                mvhd_offset = mm.find(b'mvhd', moov_offset)
                 if mvhd_offset != -1:
-                    creation_offset = mvhd_offset + 12
-                    modification_offset = mvhd_offset + 16
-                    data[creation_offset:creation_offset+4] = b'\x00\x00\x00\x00'
-                    data[modification_offset:modification_offset+4] = b'\x00\x00\x00\x00'
+                    creation_offset = mvhd_offset + 8
+                    modification_offset = mvhd_offset + 12
+                    mm[creation_offset:creation_offset+4] = b'\x00\x00\x00\x00'
+                    mm[modification_offset:modification_offset+4] = b'\x00\x00\x00\x00'
 
             # 3. PATCH MDHD
-            mdhd_offset = data.find(b'mdhd')
+            mdhd_offset = mm.find(b'mdhd')
             if mdhd_offset != -1:
-                creation_off = mdhd_offset + 12
-                mod_off = mdhd_offset + 16
-                lang_off = mdhd_offset + 28
-                data[creation_off:creation_off+4] = b'\x00\x00\x00\x00'
-                data[mod_off:mod_off+4] = b'\x00\x00\x00\x00'
-                data[lang_off:lang_off+2] = struct.pack('>H', 0x51A3)
+                creation_off = mdhd_offset + 8
+                mod_off = mdhd_offset + 12
+                lang_off = mdhd_offset + 24
+                mm[creation_off:creation_off+4] = b'\x00\x00\x00\x00'
+                mm[mod_off:mod_off+4] = b'\x00\x00\x00\x00'
+                mm[lang_off:lang_off+2] = struct.pack('>H', 0x51A3)
 
             # 4. PATCH STSZ (Inflate frame count x10)
-            stsz_offset = data.find(b'stsz')
+            stsz_offset = mm.find(b'stsz')
             if stsz_offset != -1:
-                sample_count_off = stsz_offset + 16
-                current_count = struct.unpack('>I', data[sample_count_off:sample_count_off+4])[0]
+                sample_count_off = stsz_offset + 12
+                current_count = struct.unpack('>I', mm[sample_count_off:sample_count_off+4])[0]
                 new_count = current_count * 10
-                data[sample_count_off:sample_count_off+4] = struct.pack('>I', new_count)
+                if new_count > 4294967295:
+                    new_count = 4294967295
+                mm[sample_count_off:sample_count_off+4] = struct.pack('>I', new_count)
 
             # 5. PATCH MDAT
-            mdat_offset = data.find(b'mdat')
+            mdat_offset = mm.find(b'mdat')
             if mdat_offset != -1:
-                current_size = struct.unpack('>I', data[mdat_offset:mdat_offset+4])[0]
+                current_size = struct.unpack('>I', mm[mdat_offset-4:mdat_offset])[0]
                 new_size = current_size + 1
-                data[mdat_offset:mdat_offset+4] = struct.pack('>I', new_size)
+                mm[mdat_offset-4:mdat_offset] = struct.pack('>I', new_size)
 
-            # Write the modified data back
-            f.seek(0)
-            f.write(data)
-            f.truncate()
+            mm.flush()
+            mm.close()
             
         # Move the patched temp file to the final output destination
         if os.path.exists(output_path):
