@@ -103,17 +103,19 @@ def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", e
             if moov_offset != -1:
                 mvhd_offset = mm.find(b'mvhd', moov_offset)
                 if mvhd_offset != -1:
-                    creation_offset = mvhd_offset + 8
-                    modification_offset = mvhd_offset + 12
+                    # mvhd: size(4) + type(4) + version(1) + flags(3) + creation(4) + modification(4)
+                    creation_offset = mvhd_offset + 12
+                    modification_offset = mvhd_offset + 16
                     mm[creation_offset:creation_offset+4] = b'\x00\x00\x00\x00'
                     mm[modification_offset:modification_offset+4] = b'\x00\x00\x00\x00'
 
             # 3. PATCH MDHD
             mdhd_offset = mm.find(b'mdhd')
             if mdhd_offset != -1:
-                creation_off = mdhd_offset + 8
-                mod_off = mdhd_offset + 12
-                lang_off = mdhd_offset + 24
+                # mdhd: size(4) + type(4) + version(1) + flags(3) + creation(4) + modification(4) + timescale(4) + duration(4) + language(2)
+                creation_off = mdhd_offset + 12
+                mod_off = mdhd_offset + 16
+                lang_off = mdhd_offset + 28
                 mm[creation_off:creation_off+4] = b'\x00\x00\x00\x00'
                 mm[mod_off:mod_off+4] = b'\x00\x00\x00\x00'
                 mm[lang_off:lang_off+2] = struct.pack('>H', 0x51A3)
@@ -121,7 +123,8 @@ def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", e
             # 4. PATCH STSZ (Inflate frame count x10)
             stsz_offset = mm.find(b'stsz')
             if stsz_offset != -1:
-                sample_count_off = stsz_offset + 12
+                # stsz: size(4) + type(4) + version_flags(4) + sample_size(4) + sample_count(4)
+                sample_count_off = stsz_offset + 16
                 current_count = struct.unpack('>I', mm[sample_count_off:sample_count_off+4])[0]
                 new_count = current_count * 10
                 if new_count > 4294967295:
@@ -131,9 +134,10 @@ def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", e
             # 5. PATCH MDAT
             mdat_offset = mm.find(b'mdat')
             if mdat_offset != -1:
-                current_size = struct.unpack('>I', mm[mdat_offset-4:mdat_offset])[0]
+                # mdat: size(4) + 'mdat'(4) + data
+                current_size = struct.unpack('>I', mm[mdat_offset:mdat_offset+4])[0]
                 new_size = current_size + 1
-                mm[mdat_offset-4:mdat_offset] = struct.pack('>I', new_size)
+                mm[mdat_offset:mdat_offset+4] = struct.pack('>I', new_size)
 
             mm.flush()
             mm.close()
