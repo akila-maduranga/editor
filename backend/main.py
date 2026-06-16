@@ -137,15 +137,17 @@ async def api_patch_video(
     download_filename = f"{base_name}_patched{ext}"
 
     logger.info(f"🎉 Patching complete. Sending file: {download_filename}")
-    
-    # Schedule cleanup of input file
-    background_tasks.add_task(cleanup_files, input_path)
-    
-    # Return file without cleanup (cleanup will be handled separately)
+
+    # Schedule cleanup of both files after response is sent
+    background_tasks.add_task(cleanup_files, input_path, output_path)
+
     return FileResponse(
         path=output_path,
         filename=download_filename,
-        media_type="video/mp4"
+        media_type="video/mp4",
+        headers={
+            "Content-Disposition": f'attachment; filename="{download_filename}"'
+        }
     )
 
 # Serve static files (styles, script, icons)

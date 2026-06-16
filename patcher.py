@@ -37,7 +37,7 @@ def patch_video(input_path, output_path, custom_tag="@akila"):
         "-compatible_brands", "isomiso2avc1mp41",
         "-metadata", f"comment=Patched by {custom_tag} - 120fps Optimized",
         "-metadata", "encoder=Lavf60.16.100",
-        "-metadata", "title=fixed_by_{custom_tag.replace('@', '')}",
+        "-metadata", f"title=fixed_by_{custom_tag.replace('@', '')}",
         "-metadata:s:a:0", "language=und",   # Set audio language to 'und' (undefined)
         "-movflags", "+faststart",
         temp_path

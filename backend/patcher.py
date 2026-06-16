@@ -3,8 +3,6 @@ import os
 import struct
 import logging
 import json
-import shutil
-import mmap
 
 logger = logging.getLogger("tiktok_patcher")
 
@@ -41,7 +39,6 @@ def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", e
     # ---------------------------------------------------------------------
     cmd = [
         "ffmpeg", "-y", "-i", input_path,
-        "-c", "copy",
         "-map_metadata", "-1",
         "-brand", "isom",
         "-movflags", "+faststart",
@@ -49,14 +46,29 @@ def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", e
         "-metadata", "encoder=Lavf60.16.100",
         "-metadata", f"title=fixed_by_{custom_tag.replace('@', '')}",
         "-metadata:s:a:0", "language=und",
-        temp_path
     ]
+
+    if encode_1080p:
+        info = get_video_info(input_path)
+        width = int(info.get("width", 0)) if info.get("width") else 0
+        if width > 1920:
+            logger.info(f"Scaling video from {width}px width down to 1080p")
+            cmd.extend(["-c:v", "libx264", "-preset", "fast", "-crf", "23"])
+            cmd.extend(["-vf", "scale='min(1920,iw)':'min(1080,ih)':force_original_aspect_ratio=decrease"])
+            cmd.extend(["-c:a", "copy"])
+        else:
+            logger.info("Video is already <= 1080p, using stream copy")
+            cmd.extend(["-c", "copy"])
+    else:
+        cmd.extend(["-c", "copy"])
+
+    cmd.append(temp_path)
 
     logger.info("Running FFmpeg remux...")
     try:
         subprocess.run(cmd, check=True, capture_output=True, text=True)
-    except subprocess.CalledProcessError as e:
-        err_msg = e.stderr or e.stdout or "Unknown FFmpeg error"
+    except Exception as e:
+        err_msg = str(e)
         logger.error(f"FFmpeg error: {err_msg}")
         if os.path.exists(temp_path):
             os.remove(temp_path)

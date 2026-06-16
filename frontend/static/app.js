@@ -128,20 +128,22 @@ document.addEventListener("DOMContentLoaded", () => {
             }
         });
 
-        // Track response loads
         xhr.onload = function() {
             if (xhr.status === 200) {
                 updateStep(stepRemux, "done", "Remuxed container brand to isom");
                 updateStep(stepPatch, "active", "Injecting tag & patching mdat...");
                 
-                // Simulate quick completion of the binary patch step
                 setTimeout(() => {
                     updateStep(stepPatch, "done", "Patched mdat size successfully");
                     
-                    // Retrieve video Blob
-                    const blob = xhr.response;
+                    const responseData = xhr.response;
+                    if (!responseData || responseData.byteLength === 0) {
+                        showError("Server returned an empty response.");
+                        return;
+                    }
+
+                    const blob = new Blob([responseData], { type: "video/mp4" });
                     
-                    // Parse custom filename from headers
                     const disposition = xhr.getResponseHeader("Content-Disposition");
                     patchedFileName = "patched_" + file.name;
                     if (disposition && disposition.indexOf("attachment") !== -1) {
@@ -152,33 +154,26 @@ document.addEventListener("DOMContentLoaded", () => {
                         }
                     }
 
-                    // Create blob download url
                     if (patchedBlobUrl) {
                         window.URL.revokeObjectURL(patchedBlobUrl);
                     }
                     patchedBlobUrl = window.URL.createObjectURL(blob);
                     
-                    // Transition to success state
                     showState(stateSuccess);
-                    
-                    // Automatically trigger download
                     triggerDownload();
                 }, 600);
+            } else if (xhr.status === 0) {
+                showError("Network error: Could not reach the server.");
             } else {
-                // Read error message from JSON response
                 try {
-                    const reader = new FileReader();
-                    reader.onload = function() {
-                        try {
-                            const errJson = JSON.parse(reader.result);
-                            showError(errJson.detail || "Server error occurred during processing.");
-                        } catch (e) {
-                            showError("Server error occurred during processing.");
-                        }
-                    };
-                    reader.readAsText(xhr.response);
+                    let errText = "";
+                    if (xhr.response && xhr.response.byteLength > 0) {
+                        errText = new TextDecoder("utf-8").decode(xhr.response);
+                    }
+                    const errJson = JSON.parse(errText);
+                    showError(errJson.detail || "Server error occurred during processing.");
                 } catch (e) {
-                    showError("An unexpected server response occurred.");
+                    showError("Server error (" + xhr.status + ")");
                 }
             }
         };
@@ -187,8 +182,13 @@ document.addEventListener("DOMContentLoaded", () => {
             showError("Network error: Could not reach the server.");
         };
 
-        // Expect binary response type (Blob)
-        xhr.responseType = "blob";
+        xhr.ontimeout = function() {
+            showError("Request timed out. The server is taking too long to process your video.");
+        };
+
+        // Use arraybuffer for better browser compatibility with binary downloads
+        xhr.responseType = "arraybuffer";
+        xhr.timeout = 300000; // 5 minute timeout
         xhr.send(formData);
     }
 
