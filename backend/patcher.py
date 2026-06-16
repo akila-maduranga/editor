@@ -129,8 +129,8 @@ def inject_fake_frames(data, target_frames=25570):
 
     # Append invalid atom at the end (size=1, type='free') to trigger
     # "invalid atom size" warning instead of "truncated mdat"
-    result += b'\x00\x00\x00\x01free'
-    logger.info("Appended invalid trailer atom (size=1 free)")
+    result += b'\x00\x00\x00\x07free'
+    logger.info("Appended invalid trailer atom (size=7 free)")
 
     return result
 
