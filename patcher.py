@@ -130,14 +130,10 @@ def inject_fake_frames(data, target_frames=25570):
 
     result = write_atoms(tree)
 
-    # MDAT size +1
-    mdat_pos = result.find(b'mdat')
-    if mdat_pos >= 4:
-        cur = int.from_bytes(result[mdat_pos-4:mdat_pos], 'big')
-        result = bytearray(result)
-        result[mdat_pos-4:mdat_pos] = (cur + 1).to_bytes(4, 'big')
-        result = bytes(result)
-        print(f"[*] MDAT size: {cur} -> {cur+1}")
+    # Append invalid atom at the end (size=1, type='free') to trigger
+    # "invalid atom size" warning instead of "truncated mdat"
+    result += b'\x00\x00\x00\x01free'
+    print("[*] Appended invalid trailer atom (size=1 free)")
 
     return result
 
@@ -155,6 +151,7 @@ def patch_video(input_path, output_path, custom_tag="@akila", title="", artist="
         "-brand", "isom",
         "-movflags", "+faststart",
         "-video_track_timescale", "90000",
+        "-bitexact",
         "-metadata", "encoder=Lavf60.16.100",
     ]
     if title:
