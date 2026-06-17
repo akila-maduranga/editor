@@ -148,7 +148,7 @@ def inject_fake_frames(data, target_frames=None):
     return bytes(result)
 
 
-def patch_video(input_path, output_path, custom_tag="@akila", title="", artist="", copyright="", encode_1080p=False):
+def patch_video(input_path, output_path, custom_tag="@akila", title="", artist="@akila", copyright="@akila", encode_1080p=False, mdat_oversize=1):
     if not os.path.exists(input_path):
         print(f"Error: Input file '{input_path}' not found.")
         return
@@ -160,7 +160,6 @@ def patch_video(input_path, output_path, custom_tag="@akila", title="", artist="
         "-brand", "isom",
         "-video_track_timescale", "90000",
         "-movflags", "+faststart",
-        "-bitexact",
         "-metadata", "encoder=Lavf60.16.100",
     ]
     if title:
@@ -196,8 +195,9 @@ def patch_video(input_path, output_path, custom_tag="@akila", title="", artist="
     mdat_pos = patched.find(b'mdat')
     if mdat_pos >= 4:
         cur_size = int.from_bytes(patched[mdat_pos-4:mdat_pos], 'big')
-        patched = patched[:mdat_pos-4] + (cur_size + 1).to_bytes(4, 'big') + patched[mdat_pos:]
-        print(f"MDAT: {cur_size} -> {cur_size+1} (oversize by 1)")
+        new_size = cur_size + mdat_oversize
+        patched = patched[:mdat_pos-4] + new_size.to_bytes(4, 'big') + patched[mdat_pos:]
+        print(f"MDAT: {cur_size} -> {new_size} (oversize by {mdat_oversize})")
 
     with open(output_path, 'wb') as f:
         f.write(patched)
@@ -214,5 +214,6 @@ if __name__ == "__main__":
     p.add_argument("--copyright", default="", help="Copyright metadata")
     p.add_argument("--tag", default="@akila", help="Comment/social tag")
     p.add_argument("--hd", action="store_true", help="HD Optimizer")
+    p.add_argument("--oversize", type=int, default=1, help="MDAT oversize bytes (default: 1)")
     args = p.parse_args()
-    patch_video(args.input, args.output, custom_tag=args.tag, title=args.title, artist=args.artist, copyright=args.copyright, encode_1080p=args.hd)
+    patch_video(args.input, args.output, custom_tag=args.tag, title=args.title, artist=args.artist, copyright=args.copyright, encode_1080p=args.hd, mdat_oversize=args.oversize)

@@ -159,7 +159,7 @@ def inject_fake_frames(data, target_frames=None):
     return bytes(result)
 
 
-def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", title: str = "", artist: str = "", copyright: str = "", encode_1080p: bool = False) -> tuple[bool, str]:
+def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", title: str = "", artist: str = "@akila", copyright: str = "@akila", encode_1080p: bool = False, mdat_oversize: int = 1) -> tuple[bool, str]:
     if not os.path.exists(input_path):
         return False, f"Input file '{input_path}' not found."
 
@@ -171,7 +171,6 @@ def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", t
         "-brand", "isom",
         "-video_track_timescale", "90000",
         "-movflags", "+faststart",
-        "-bitexact",
         "-metadata", "encoder=Lavf60.16.100",
     ]
     if title:
@@ -213,8 +212,9 @@ def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", t
         mdat_pos = patched.find(b'mdat')
         if mdat_pos >= 4:
             cur_size = int.from_bytes(patched[mdat_pos-4:mdat_pos], 'big')
-            patched = patched[:mdat_pos-4] + (cur_size + 1).to_bytes(4, 'big') + patched[mdat_pos:]
-            logger.info(f"MDAT: {cur_size} -> {cur_size+1} (oversize by 1)")
+            new_size = cur_size + mdat_oversize
+            patched = patched[:mdat_pos-4] + new_size.to_bytes(4, 'big') + patched[mdat_pos:]
+            logger.info(f"MDAT: {cur_size} -> {new_size} (oversize by {mdat_oversize})")
 
         with open(output_path, 'wb') as f:
             f.write(patched)
