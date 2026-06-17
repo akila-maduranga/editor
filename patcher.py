@@ -45,7 +45,7 @@ def find_atom(atoms, path):
     return None
 
 
-def inject_fake_frames(data, target_frames=25570):
+def inject_fake_frames(data, target_frames=None):
     moov_pos = data.find(b'moov')
     if moov_pos < 4:
         print("[-] moov not found")
@@ -80,6 +80,8 @@ def inject_fake_frames(data, target_frames=25570):
 
     stsz_data = bytearray(stsz['data'])
     orig_count = int.from_bytes(stsz_data[8:12], 'big')
+    if target_frames is None:
+        target_frames = orig_count * 10
     diff = target_frames - orig_count
     if diff <= 0:
         print(f"[*] Already {orig_count} frames")
@@ -186,15 +188,7 @@ def patch_video(input_path, output_path, custom_tag="@akila", title="", artist="
     with open(output_path, 'rb') as f:
         data = f.read()
 
-    stsz_pos = data.find(b'stsz')
-    if stsz_pos < 0:
-        print("stsz not found")
-        return
-    orig_count = int.from_bytes(data[stsz_pos + 16:stsz_pos + 20], 'big')
-    target = orig_count * 10
-    print(f"Frames: {orig_count} -> {target} (10x)")
-
-    patched = inject_fake_frames(data, target_frames=target)
+    patched = inject_fake_frames(data)
     if patched is None:
         print("Injection failed")
         return
