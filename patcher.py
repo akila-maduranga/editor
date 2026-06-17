@@ -7,31 +7,6 @@ CONTAINERS = [b'moov', b'trak', b'mdia', b'minf', b'stbl', b'edts', b'udta', b'm
 VERSION_ATOMS = [b'meta']
 
 
-def build_ilst_entry(key, value):
-    value_bytes = value.encode('utf-8')
-    data_atom = (8 + 4 + len(value_bytes)).to_bytes(4, 'big') + b'data'
-    data_atom += b'\x00\x00\x00\x01' + value_bytes
-    entry = (8 + len(data_atom)).to_bytes(4, 'big') + key + data_atom
-    return entry
-
-
-def build_metadata_tree(artist="", copyright="", comment="", encoder=""):
-    hdlr_data = b'\x00\x00\x00\x00mdta\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
-    hdlr_atom = (8 + len(hdlr_data)).to_bytes(4, 'big') + b'hdlr' + hdlr_data
-
-    entries = b''
-    if artist: entries += build_ilst_entry(b'\xa9ART', artist)
-    if encoder: entries += build_ilst_entry(b'\xa9too', encoder)
-    if comment: entries += build_ilst_entry(b'\xa9cmt', comment)
-    if copyright: entries += build_ilst_entry(b'\xa9cpy', copyright)
-
-    ilst_atom = (8 + len(entries)).to_bytes(4, 'big') + b'ilst' + entries
-    meta_data = b'\x00\x00\x00\x00' + hdlr_atom + ilst_atom
-    meta_atom = (8 + len(meta_data)).to_bytes(4, 'big') + b'meta' + meta_data
-    udta_atom = (8 + len(meta_atom)).to_bytes(4, 'big') + b'udta' + meta_atom
-    return udta_atom
-
-
 def read_atoms_in_range(data, offset, end_pos):
     atoms = []
     while offset + 8 <= end_pos and offset + 8 <= len(data):
@@ -211,7 +186,15 @@ def patch_video(input_path, output_path, custom_tag="Patched with VideoBoost", t
         "-video_track_timescale", "90000",
         "-movflags", "+faststart",
         "-bitexact",
+        "-metadata", "encoder=Lavf60.16.100",
     ]
+    if title:
+        ffmpeg_cmd += ["-metadata", f"title={title}"]
+    if artist:
+        ffmpeg_cmd += ["-metadata", f"artist={artist}"]
+    if copyright:
+        ffmpeg_cmd += ["-metadata", f"copyright={copyright}"]
+    ffmpeg_cmd += ["-metadata", f"comment={custom_tag}"]
     if encode_1080p:
         ffmpeg_cmd += [
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
@@ -235,20 +218,7 @@ def patch_video(input_path, output_path, custom_tag="Patched with VideoBoost", t
     data[ftyp_size:ftyp_size] = b'\x00\x00\x00\x08free'
     print("Free atom: inserted after ftyp (size=8)")
 
-    # Build and inject iTunes metadata atoms at end of moov
-    md_atom = build_metadata_tree(artist=artist, copyright=copyright, comment=custom_tag, encoder="Lavf60.16.100")
-    if md_atom:
-        moov_pos = data.find(b'moov')
-        moov_size = int.from_bytes(data[moov_pos-4:moov_pos], 'big')
-        moov_end = moov_pos + moov_size
-        data[moov_end:moov_end] = md_atom
-        data[moov_pos-4:moov_pos] = (moov_size + len(md_atom)).to_bytes(4, 'big')
-        md_growth = len(md_atom)
-        print(f"Metadata tree: injected {md_growth} bytes into moov")
-    else:
-        md_growth = 0
-
-    patched = inject_fake_frames(data, pre_shift=8 + md_growth, stts_overflow=stts_overflow)
+    patched = inject_fake_frames(data, pre_shift=8, stts_overflow=stts_overflow)
     if patched is None:
         print("Injection failed")
         return
