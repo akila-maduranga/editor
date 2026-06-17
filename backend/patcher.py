@@ -47,7 +47,7 @@ def find_atom(atoms, path):
     return None
 
 
-def inject_fake_frames(data, target_frames=None):
+def inject_fake_frames(data, target_frames=None, pre_shift=0):
     # Find moov position via byte search (preserves everything outside moov)
     moov_pos = data.find(b'moov')
     if moov_pos < 4:
@@ -142,7 +142,7 @@ def inject_fake_frames(data, target_frames=None):
                     for i in range(entry_count):
                         idx = 8 + i * 4
                         val = int.from_bytes(co_data[idx:idx+4], 'big')
-                        co_data[idx:idx+4] = (val + growth).to_bytes(4, 'big')
+                        co_data[idx:idx+4] = (val + growth + pre_shift).to_bytes(4, 'big')
                     result[child['start'] + pos_shift + 8:
                            child['start'] + pos_shift + 8 + len(child['data'])] = bytes(co_data)
                 elif child['name'] == b'co64':
@@ -152,7 +152,7 @@ def inject_fake_frames(data, target_frames=None):
                     for i in range(entry_count):
                         idx = 8 + i * 8
                         val = int.from_bytes(co_data[idx:idx+8], 'big')
-                        co_data[idx:idx+8] = (val + growth).to_bytes(8, 'big')
+                        co_data[idx:idx+8] = (val + growth + pre_shift).to_bytes(8, 'big')
                     result[child['start'] + pos_shift + 8:
                            child['start'] + pos_shift + 8 + len(child['data'])] = bytes(co_data)
 
@@ -203,12 +203,24 @@ def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", t
     except FileNotFoundError:
         return False, "FFmpeg not found"
 
-    # Stage 2: stsz injector + mdat oversize (in-place byte patching within moov only)
+    # Stage 2: byte-level patch injection
     try:
         with open(output_path, 'rb') as f:
-            data = f.read()
+            data = bytearray(f.read())
 
-        patched = bytearray(inject_fake_frames(data))
+        # Insert free atom (size=8) between ftyp and moov
+        ftyp_size = int.from_bytes(data[0:4], 'big')
+        data[ftyp_size:ftyp_size] = b'\x00\x00\x00\x08free'
+        logger.info("Free atom: inserted after ftyp (size=8)")
+
+        # Insert fake atom (size=4, invalid) between moov and mdat
+        moov_pos = data.find(b'moov')
+        moov_size = int.from_bytes(data[moov_pos-4:moov_pos], 'big')
+        moov_end = moov_pos + moov_size
+        data[moov_end:moov_end] = b'\x00\x00\x00\x04xxxx'
+        logger.info("Fake atom: inserted after moov (size=4, invalid)")
+
+        patched = bytearray(inject_fake_frames(data, pre_shift=16))
 
         # Corrupt mdat type (mdat -> mdau) so parser doesn't recognize it
         mdat_pos = patched.find(b'mdat')
@@ -217,10 +229,6 @@ def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", t
             new_type = (int.from_bytes(cur_type, 'big') + 1).to_bytes(4, 'big')
             patched[mdat_pos:mdat_pos+4] = new_type
             logger.info(f"MDAT type: {cur_type} -> {new_type}")
-
-        # Append fake trailer atom with invalid size (4 bytes < 8 minimum)
-        patched += b'\x00\x00\x00\x04xxxx'
-        logger.info("Fake trailer: size=4 (invalid, < 8)")
 
         with open(output_path, 'wb') as f:
             f.write(patched)
