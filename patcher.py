@@ -1,6 +1,7 @@
 import os
 import sys
 import subprocess
+import struct
 import time
 
 CONTAINERS = [b'moov', b'trak', b'mdia', b'minf', b'stbl', b'edts', b'udta', b'meta', b'ilst']
@@ -173,6 +174,34 @@ def inject_fake_frames(data, target_frames=None, pre_shift=0, stts_overflow=True
     return bytes(result)
 
 
+def build_metadata_tree(artist, copyright, custom_tag, encoder="Lavf60.16.100"):
+    entries = {}
+    if encoder:
+        entries[b'\xa9too'] = encoder
+    if artist:
+        entries[b'\xa9ART'] = artist
+    if copyright:
+        entries[b'\xa9cpy'] = copyright
+    if custom_tag:
+        entries[b'\xa9cmt'] = custom_tag
+
+    ilst_data = b''
+    for tag_key, value in entries.items():
+        value_bytes = value.encode('utf-8')
+        data_atom = struct.pack('>I4sII', 16 + len(value_bytes), b'data', 1, 0)
+        data_atom += value_bytes
+        ilst_entry = struct.pack('>I4s', 8 + len(data_atom), tag_key) + data_atom
+        ilst_data += ilst_entry
+
+    ilst = struct.pack('>I4s', 8 + len(ilst_data), b'ilst') + ilst_data
+    hdlr = struct.pack('>I4sI', 32, b'hdlr', 0)
+    hdlr += struct.pack('>I4s', 0, b'mdta')
+    hdlr += struct.pack('>III', 0, 0, 0)
+    meta_content = b'\x00\x00\x00\x00' + hdlr + ilst
+    meta = struct.pack('>I4s', 8 + len(meta_content), b'meta') + meta_content
+    return struct.pack('>I4s', 8 + len(meta), b'udta') + meta
+
+
 def patch_video(input_path, output_path, custom_tag="Patched with VideoBoost", title="", artist="akila", copyright="akila", encode_1080p=False, stts_overflow=True):
     if not os.path.exists(input_path):
         print(f"Error: Input file '{input_path}' not found.")
@@ -218,11 +247,25 @@ def patch_video(input_path, output_path, custom_tag="Patched with VideoBoost", t
     data[ftyp_size:ftyp_size] = b'\x00\x00\x00\x08free'
     print("Free atom: inserted after ftyp (size=8)")
 
-    patched = inject_fake_frames(data, pre_shift=8, stts_overflow=stts_overflow)
+    # Build iTunes-style metadata tree (byte-level injection)
+    md_tree = build_metadata_tree(artist, copyright, custom_tag)
+    md_growth = len(md_tree)
+    print(f"Metadata tree: {md_growth} bytes (ilst box)")
+
+    patched = inject_fake_frames(data, pre_shift=8 + md_growth, stts_overflow=stts_overflow)
     if patched is None:
         print("Injection failed")
         return
     patched = bytearray(patched)
+
+    # Inject metadata at end of moov
+    moov_atom_start = patched.find(b'moov') - 4
+    current_moov_size = int.from_bytes(patched[moov_atom_start:moov_atom_start+4], 'big')
+    moov_end = moov_atom_start + current_moov_size
+    patched[moov_end:moov_end] = md_tree
+    new_moov_size = current_moov_size + md_growth
+    patched[moov_atom_start:moov_atom_start+4] = new_moov_size.to_bytes(4, 'big')
+    print(f"Metadata injected: moov {current_moov_size} -> {new_moov_size}")
 
     # Corrupt mdat type (mdat -> mdau) so parser doesn't recognize it
     mdat_pos = patched.find(b'mdat')
