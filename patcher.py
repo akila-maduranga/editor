@@ -70,7 +70,7 @@ def find_atom(atoms, path):
     return None
 
 
-def inject_fake_frames(data, target_frames=None, pre_shift=0, stts_overflow=True):
+def inject_fake_frames(data, target_frames=None, pre_shift=0):
     moov_pos = data.find(b'moov')
     if moov_pos < 4:
         print("[-] moov not found")
@@ -113,7 +113,7 @@ def inject_fake_frames(data, target_frames=None, pre_shift=0, stts_overflow=True
         return data
 
     print(f"[*] STSZ: {orig_count} -> {target_frames}")
-    new_entries = b'\x00\x00\x00\x00' * diff
+    new_entries = struct.pack('>I', 8) * diff
 
     result = bytearray(data)
 
@@ -125,16 +125,21 @@ def inject_fake_frames(data, target_frames=None, pre_shift=0, stts_overflow=True
 
     result[stsz_start_in_file + 8:stsz_start_in_file + 8 + old_stsz_data_len] = new_stsz_data
 
-    if stts_overflow:
-        stts = find_atom(stbl['children'], [b'stts'])
-        if stts:
-            stts_start = stts['start']
-            old_stts_data_len = len(stts['data'])
-            stts_data = bytearray(stts['data'])
-            entry_count = int.from_bytes(stts_data[8:12], 'big')
-            stts_data[8:12] = (entry_count + diff).to_bytes(4, 'big')
-            result[stts_start + 8:stts_start + 8 + old_stts_data_len] = bytes(stts_data)
-            print(f"[*] STTS: entries {entry_count} -> {entry_count + diff}")
+    # Rebuild stts: 2-entry format (original + inflated surplus)
+    stts = find_atom(stbl['children'], [b'stts'])
+    if stts:
+        stts_start = stts['start']
+        stts_data = bytearray(stts['data'])
+        entry_count = int.from_bytes(stts_data[4:8], 'big')
+        first_delta = int.from_bytes(stts_data[8:12], 'big')
+        stts_data[4:8] = struct.pack('>I', 2)
+        stts_data[8:16] = struct.pack('>II', orig_count, first_delta)
+        stts_data[16:24] = struct.pack('>II', diff, first_delta)
+        if len(stts_data) > 24:
+            for i in range(24, len(stts_data)):
+                stts_data[i] = 0
+        result[stts_start + 8:stts_start + 8 + len(stts_data)] = bytes(stts_data)
+        print(f"[*] STTS: rebuilt ({orig_count}+{diff} frames, delta={first_delta})")
 
     for parent in [stsz, stbl, minf, mdia, video_trak]:
         old_sz = parent['size']
@@ -194,15 +199,18 @@ def build_metadata_tree(artist, copyright, custom_tag, encoder="Lavf60.16.100"):
         ilst_data += ilst_entry
 
     ilst = struct.pack('>I4s', 8 + len(ilst_data), b'ilst') + ilst_data
-    hdlr = struct.pack('>I4sI', 32, b'hdlr', 0)
-    hdlr += struct.pack('>I4s', 0, b'mdta')
-    hdlr += struct.pack('>III', 0, 0, 0)
+    hdlr = struct.pack('>I4sI', 33, b'hdlr', 0)
+    hdlr += struct.pack('>I4s', 0, b'mdir')
+    hdlr += struct.pack('>4s', b'appl')
+    hdlr += struct.pack('>I', 0)
+    hdlr += struct.pack('>I', 0)
+    hdlr += b'\x00'
     meta_content = b'\x00\x00\x00\x00' + hdlr + ilst
     meta = struct.pack('>I4s', 8 + len(meta_content), b'meta') + meta_content
     return struct.pack('>I4s', 8 + len(meta), b'udta') + meta
 
 
-def patch_video(input_path, output_path, custom_tag="Patched with VideoBoost", title="", artist="akila", copyright="akila", encode_1080p=False, stts_overflow=True):
+def patch_video(input_path, output_path, custom_tag="Patched with VideoBoost", title="", artist="akila", copyright="akila", encode_1080p=False):
     if not os.path.exists(input_path):
         print(f"Error: Input file '{input_path}' not found.")
         return
@@ -252,7 +260,7 @@ def patch_video(input_path, output_path, custom_tag="Patched with VideoBoost", t
     md_growth = len(md_tree)
     print(f"Metadata tree: {md_growth} bytes (ilst box)")
 
-    patched = inject_fake_frames(data, pre_shift=8 + md_growth, stts_overflow=stts_overflow)
+    patched = inject_fake_frames(data, pre_shift=8 + md_growth)
     if patched is None:
         print("Injection failed")
         return
@@ -294,6 +302,5 @@ if __name__ == "__main__":
     p.add_argument("--copyright", default="akila", help="Copyright metadata")
     p.add_argument("--tag", default="Patched with VideoBoost", help="Comment/social tag")
     p.add_argument("--hd", action="store_true", help="HD Optimizer")
-    p.add_argument("--no-stts", action="store_true", help="Disable STTS overflow exploit")
     args = p.parse_args()
-    patch_video(args.input, args.output, custom_tag=args.tag, title=args.title, artist=args.artist, copyright=args.copyright, encode_1080p=args.hd, stts_overflow=not args.no_stts)
+    patch_video(args.input, args.output, custom_tag=args.tag, title=args.title, artist=args.artist, copyright=args.copyright, encode_1080p=args.hd)

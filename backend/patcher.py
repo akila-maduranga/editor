@@ -50,7 +50,7 @@ def find_atom(atoms, path):
     return None
 
 
-def inject_fake_frames(data, target_frames=None, pre_shift=0, stts_overflow=True):
+def inject_fake_frames(data, target_frames=None, pre_shift=0):
     # Find moov position via byte search (preserves everything outside moov)
     moov_pos = data.find(b'moov')
     if moov_pos < 4:
@@ -93,7 +93,7 @@ def inject_fake_frames(data, target_frames=None, pre_shift=0, stts_overflow=True
         return data
 
     logger.info(f"STSZ: inflating {orig_count} -> {target_frames}")
-    new_entries = b'\x00\x00\x00\x00' * diff
+    new_entries = struct.pack('>I', 8) * diff
 
     # Build the new moov byte-for-byte by walking the moov subtree
     # replacing stsz and stts data in-place
@@ -108,18 +108,20 @@ def inject_fake_frames(data, target_frames=None, pre_shift=0, stts_overflow=True
 
     result[stsz_start_in_file + 8:stsz_start_in_file + 8 + old_stsz_data_len] = new_stsz_data
 
-    # 2. Update stts entry count (overflow exploit)
-    if stts_overflow:
-        stts = find_atom(stbl['children'], [b'stts'])
-        if stts:
-            stts_start = stts['start']
-            old_stts_data_len = len(stts['data'])
-            stts_data = bytearray(stts['data'])
-            entry_count = int.from_bytes(stts_data[8:12], 'big')
-            stts_data[8:12] = (entry_count + diff).to_bytes(4, 'big')
-            # stts size doesn't change (only 4-byte count field updated, no new entries)
-            result[stts_start + 8:stts_start + 8 + old_stts_data_len] = bytes(stts_data)
-            logger.info(f"STTS: entry count {entry_count} -> {entry_count + diff}")
+    # 2. Rebuild stts: 2-entry format (original + inflated surplus)
+    stts = find_atom(stbl['children'], [b'stts'])
+    if stts:
+        stts_start = stts['start']
+        stts_data = bytearray(stts['data'])
+        entry_count = int.from_bytes(stts_data[4:8], 'big')
+        first_delta = int.from_bytes(stts_data[8:12], 'big')
+        stts_data[4:8] = struct.pack('>I', 2)
+        stts_data[8:16] = struct.pack('>II', orig_count, first_delta)
+        stts_data[16:24] = struct.pack('>II', diff, first_delta)
+        if len(stts_data) > 24:
+            stts_data[24:] = b'\x00' * (len(stts_data) - 24)
+        result[stts_start + 8:stts_start + 8 + len(stts_data)] = bytes(stts_data)
+        logger.info(f"STTS: rebuilt ({orig_count}+{diff} frames, delta={first_delta})")
 
     # 3. Update all parent container sizes (stbl -> minf -> mdia -> trak -> moov)
     parents = [stsz, stbl, minf, mdia, video_trak]
@@ -183,15 +185,18 @@ def build_metadata_tree(artist, copyright, custom_tag, encoder="Lavf60.16.100"):
         ilst_data += ilst_entry
 
     ilst = struct.pack('>I4s', 8 + len(ilst_data), b'ilst') + ilst_data
-    hdlr = struct.pack('>I4sI', 32, b'hdlr', 0)
-    hdlr += struct.pack('>I4s', 0, b'mdta')
-    hdlr += struct.pack('>III', 0, 0, 0)
+    hdlr = struct.pack('>I4sI', 33, b'hdlr', 0)
+    hdlr += struct.pack('>I4s', 0, b'mdir')
+    hdlr += struct.pack('>4s', b'appl')
+    hdlr += struct.pack('>I', 0)
+    hdlr += struct.pack('>I', 0)
+    hdlr += b'\x00'
     meta_content = b'\x00\x00\x00\x00' + hdlr + ilst
     meta = struct.pack('>I4s', 8 + len(meta_content), b'meta') + meta_content
     return struct.pack('>I4s', 8 + len(meta), b'udta') + meta
 
 
-def patch_video(input_path: str, output_path: str, custom_tag: str = "Patched with VideoBoost", title: str = "", artist: str = "akila", copyright: str = "akila", encode_1080p: bool = False, stts_overflow: bool = True) -> tuple[bool, str]:
+def patch_video(input_path: str, output_path: str, custom_tag: str = "Patched with VideoBoost", title: str = "", artist: str = "akila", copyright: str = "akila", encode_1080p: bool = False) -> tuple[bool, str]:
     if not os.path.exists(input_path):
         return False, f"Input file '{input_path}' not found."
 
@@ -250,7 +255,7 @@ def patch_video(input_path: str, output_path: str, custom_tag: str = "Patched wi
         md_growth = len(md_tree)
         logger.info(f"Metadata tree: {md_growth} bytes (ilst box)")
 
-        patched = bytearray(inject_fake_frames(data, pre_shift=8 + md_growth, stts_overflow=stts_overflow))
+        patched = bytearray(inject_fake_frames(data, pre_shift=8 + md_growth))
 
         # Inject metadata at end of moov
         moov_atom_start = patched.find(b'moov') - 4
