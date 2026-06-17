@@ -131,7 +131,7 @@ def inject_fake_frames(data, target_frames=None, pre_shift=0):
         stts_start = stts['start']
         stts_data = bytearray(stts['data'])
         entry_count = int.from_bytes(stts_data[4:8], 'big')
-        first_delta = int.from_bytes(stts_data[8:12], 'big')
+        first_delta = int.from_bytes(stts_data[12:16], 'big')
         stts_data[4:8] = struct.pack('>I', 2)
         stts_data[8:16] = struct.pack('>II', orig_count, first_delta)
         stts_data[16:24] = struct.pack('>II', diff, first_delta)
