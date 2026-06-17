@@ -198,15 +198,7 @@ def patch_video(input_path: str, output_path: str, custom_tag: str = "Patched wi
         "-video_track_timescale", "90000",
         "-movflags", "+faststart",
         "-bitexact",
-        "-metadata", "encoder=Lavf60.16.100",
     ]
-    if title:
-        ffmpeg_cmd += ["-metadata", f"title={title}"]
-    if artist:
-        ffmpeg_cmd += ["-metadata", f"artist={artist}"]
-    if copyright:
-        ffmpeg_cmd += ["-metadata", f"copyright={copyright}"]
-    ffmpeg_cmd += ["-metadata", f"comment={custom_tag}"]
     if encode_1080p:
         ffmpeg_cmd += [
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",

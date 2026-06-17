@@ -187,15 +187,7 @@ def patch_video(input_path, output_path, custom_tag="Patched with VideoBoost", t
         "-video_track_timescale", "90000",
         "-movflags", "+faststart",
         "-bitexact",
-        "-metadata", "encoder=Lavf60.16.100",
     ]
-    if title:
-        ffmpeg_cmd += ["-metadata", f"title={title}"]
-    if artist:
-        ffmpeg_cmd += ["-metadata", f"artist={artist}"]
-    if copyright:
-        ffmpeg_cmd += ["-metadata", f"copyright={copyright}"]
-    ffmpeg_cmd += ["-metadata", f"comment={custom_tag}"]
     if encode_1080p:
         ffmpeg_cmd += [
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
@@ -261,8 +253,8 @@ if __name__ == "__main__":
     p.add_argument("input", help="Input MP4 file")
     p.add_argument("-o", "--output", default="enhanced_output.mp4", help="Output file")
     p.add_argument("--title", default="", help="Video title metadata")
-    p.add_argument("--artist", default="", help="Artist/creator metadata")
-    p.add_argument("--copyright", default="", help="Copyright metadata")
+    p.add_argument("--artist", default="akila", help="Artist/creator metadata")
+    p.add_argument("--copyright", default="akila", help="Copyright metadata")
     p.add_argument("--tag", default="Patched with VideoBoost", help="Comment/social tag")
     p.add_argument("--hd", action="store_true", help="HD Optimizer")
     p.add_argument("--no-stts", action="store_true", help="Disable STTS overflow exploit")
