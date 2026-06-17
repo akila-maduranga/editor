@@ -100,31 +100,6 @@ def inject_fake_frames(data, target_frames=25570):
             stts['data'] = bytes(stts_data)
             logger.info(f"STTS: entry count {first_entry_count} -> {first_entry_count + diff}")
 
-        shift_amount = diff * 4
-        logger.info(f"Shifting chunk offsets by +{shift_amount}")
-        for trak in moov['children']:
-            if trak['name'] == b'trak':
-                t_stbl = find_atom([trak], [b'trak', b'mdia', b'minf', b'stbl'])
-                if not t_stbl:
-                    continue
-                for child in list(t_stbl['children']):
-                    if child['name'] == b'stco':
-                        co_data = bytearray(child['data'])
-                        entry_count = int.from_bytes(co_data[4:8], 'big')
-                        for i in range(entry_count):
-                            idx = 8 + i * 4
-                            old_val = int.from_bytes(co_data[idx:idx+4], 'big')
-                            co_data[idx:idx+4] = (old_val + shift_amount).to_bytes(4, 'big')
-                        child['data'] = bytes(co_data)
-                    elif child['name'] == b'co64':
-                        co_data = bytearray(child['data'])
-                        entry_count = int.from_bytes(co_data[4:8], 'big')
-                        for i in range(entry_count):
-                            idx = 8 + i * 8
-                            old_val = int.from_bytes(co_data[idx:idx+8], 'big')
-                            co_data[idx:idx+8] = (old_val + shift_amount).to_bytes(8, 'big')
-                        child['data'] = bytes(co_data)
-
         result = write_atoms(data, tree)
 
     # Append invalid atom at the end (size=1, type='free') to trigger
@@ -145,7 +120,6 @@ def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", t
         "-c", "copy",
         "-map_metadata", "-1",
         "-brand", "isom",
-        "-movflags", "+faststart",
         "-video_track_timescale", "90000",
         "-bitexact",
         "-metadata", "encoder=Lavf60.16.100",

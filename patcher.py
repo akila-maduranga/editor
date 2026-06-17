@@ -103,31 +103,6 @@ def inject_fake_frames(data, target_frames=25570):
         stts['data'] = bytes(stts_data)
         print(f"[*] STTS: entries {entry_count} -> {entry_count + diff}")
 
-    shift = diff * 4
-    print(f"[*] Shifting chunk offsets by +{shift}")
-    for trak in moov['children']:
-        if trak['name'] == b'trak':
-            t_stbl = find_atom([trak], [b'trak', b'mdia', b'minf', b'stbl'])
-            if not t_stbl:
-                continue
-            for child in list(t_stbl['children']):
-                if child['name'] == b'stco':
-                    d = bytearray(child['data'])
-                    n = int.from_bytes(d[4:8], 'big')
-                    for i in range(n):
-                        idx = 8 + i * 4
-                        v = int.from_bytes(d[idx:idx+4], 'big')
-                        d[idx:idx+4] = (v + shift).to_bytes(4, 'big')
-                    child['data'] = bytes(d)
-                elif child['name'] == b'co64':
-                    d = bytearray(child['data'])
-                    n = int.from_bytes(d[4:8], 'big')
-                    for i in range(n):
-                        idx = 8 + i * 8
-                        v = int.from_bytes(d[idx:idx+8], 'big')
-                        d[idx:idx+8] = (v + shift).to_bytes(8, 'big')
-                    child['data'] = bytes(d)
-
     result = write_atoms(tree)
 
     # Append invalid atom at the end (size=1, type='free') to trigger
@@ -149,7 +124,6 @@ def patch_video(input_path, output_path, custom_tag="@akila", title="", artist="
         "-c", "copy",
         "-map_metadata", "-1",
         "-brand", "isom",
-        "-movflags", "+faststart",
         "-video_track_timescale", "90000",
         "-bitexact",
         "-metadata", "encoder=Lavf60.16.100",
