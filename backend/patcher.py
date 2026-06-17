@@ -93,7 +93,7 @@ def inject_fake_frames(data, target_frames=None, pre_shift=0):
         return data
 
     logger.info(f"STSZ: inflating {orig_count} -> {target_frames}")
-    new_entries = struct.pack('>I', 8) * diff
+    new_entries = b'\x00\x00\x00\x00' * diff
 
     # Build the new moov byte-for-byte by walking the moov subtree
     # replacing stsz and stts data in-place

@@ -113,7 +113,7 @@ def inject_fake_frames(data, target_frames=None, pre_shift=0):
         return data
 
     print(f"[*] STSZ: {orig_count} -> {target_frames}")
-    new_entries = struct.pack('>I', 8) * diff
+    new_entries = b'\x00\x00\x00\x00' * diff
 
     result = bytearray(data)
 
