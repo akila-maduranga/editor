@@ -208,7 +208,7 @@ def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", t
         with open(output_path, 'rb') as f:
             data = f.read()
 
-        patched = inject_fake_frames(data)
+        patched = bytearray(inject_fake_frames(data))
 
         # Corrupt mdat type (mdat -> mdau) so parser doesn't recognize it
         mdat_pos = patched.find(b'mdat')

@@ -192,6 +192,7 @@ def patch_video(input_path, output_path, custom_tag="@akila", title="", artist="
     if patched is None:
         print("Injection failed")
         return
+    patched = bytearray(patched)
 
     # Corrupt mdat type (mdat -> mdau) so parser doesn't recognize it
     mdat_pos = patched.find(b'mdat')
