@@ -171,6 +171,7 @@ def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", t
         "-brand", "isom",
         "-video_track_timescale", "90000",
         "-movflags", "+faststart",
+        "-bitexact",
         "-metadata", "encoder=Lavf60.16.100",
     ]
     if title:
@@ -209,9 +210,13 @@ def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", t
 
         patched = inject_fake_frames(data)
 
-        # Append a corrupted trailer atom (size=1, invalid) to trigger "invalid atom size"
-        patched += b'\x00\x00\x00\x01\x66\x72\x65\x65'
-        logger.info("Trailer: corrupted free atom (size=1) appended")
+        # Corrupt mdat size by mdat_oversize bytes to trigger parser warning
+        mdat_pos = patched.find(b'mdat')
+        if mdat_pos >= 4 and mdat_oversize > 0:
+            cur_size = int.from_bytes(patched[mdat_pos-4:mdat_pos], 'big')
+            new_size = cur_size + mdat_oversize
+            patched = patched[:mdat_pos-4] + new_size.to_bytes(4, 'big') + patched[mdat_pos:]
+            logger.info(f"MDAT: {cur_size} -> {new_size} (oversize by {mdat_oversize})")
 
         with open(output_path, 'wb') as f:
             f.write(patched)
