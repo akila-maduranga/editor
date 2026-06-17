@@ -5,7 +5,32 @@ import subprocess
 
 logger = logging.getLogger("tiktok_patcher")
 
-CONTAINERS = [b'moov', b'trak', b'mdia', b'minf', b'stbl', b'edts']
+CONTAINERS = [b'moov', b'trak', b'mdia', b'minf', b'stbl', b'edts', b'udta', b'meta', b'ilst']
+
+
+def build_ilst_entry(key, value):
+    value_bytes = value.encode('utf-8')
+    data_atom = (8 + 4 + len(value_bytes)).to_bytes(4, 'big') + b'data'
+    data_atom += b'\x00\x00\x00\x01' + value_bytes
+    entry = (8 + len(data_atom)).to_bytes(4, 'big') + key + data_atom
+    return entry
+
+
+def build_metadata_tree(artist="", copyright="", comment="", encoder=""):
+    hdlr_data = b'\x00\x00\x00\x00mdta\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+    hdlr_atom = (8 + len(hdlr_data)).to_bytes(4, 'big') + b'hdlr' + hdlr_data
+
+    entries = b''
+    if artist: entries += build_ilst_entry(b'\xa9ART', artist)
+    if encoder: entries += build_ilst_entry(b'\xa9too', encoder)
+    if comment: entries += build_ilst_entry(b'\xa9cmt', comment)
+    if copyright: entries += build_ilst_entry(b'\xa9cpy', copyright)
+
+    ilst_atom = (8 + len(entries)).to_bytes(4, 'big') + b'ilst' + entries
+    meta_data = b'\x00\x00\x00\x00' + hdlr_atom + ilst_atom
+    meta_atom = (8 + len(meta_data)).to_bytes(4, 'big') + b'meta' + meta_data
+    udta_atom = (8 + len(meta_atom)).to_bytes(4, 'big') + b'udta' + meta_atom
+    return udta_atom
 
 
 def read_atoms_in_range(data, offset, end_pos):
@@ -47,7 +72,7 @@ def find_atom(atoms, path):
     return None
 
 
-def inject_fake_frames(data, target_frames=None, pre_shift=0):
+def inject_fake_frames(data, target_frames=None, pre_shift=0, stts_overflow=True):
     # Find moov position via byte search (preserves everything outside moov)
     moov_pos = data.find(b'moov')
     if moov_pos < 4:
@@ -105,17 +130,18 @@ def inject_fake_frames(data, target_frames=None, pre_shift=0):
 
     result[stsz_start_in_file + 8:stsz_start_in_file + 8 + old_stsz_data_len] = new_stsz_data
 
-    # 2. Update stts entry count
-    stts = find_atom(stbl['children'], [b'stts'])
-    if stts:
-        stts_start = stts['start']
-        old_stts_data_len = len(stts['data'])
-        stts_data = bytearray(stts['data'])
-        entry_count = int.from_bytes(stts_data[8:12], 'big')
-        stts_data[8:12] = (entry_count + diff).to_bytes(4, 'big')
-        # stts size doesn't change (only 4-byte count field updated, no new entries)
-        result[stts_start + 8:stts_start + 8 + old_stts_data_len] = bytes(stts_data)
-        logger.info(f"STTS: entry count {entry_count} -> {entry_count + diff}")
+    # 2. Update stts entry count (overflow exploit)
+    if stts_overflow:
+        stts = find_atom(stbl['children'], [b'stts'])
+        if stts:
+            stts_start = stts['start']
+            old_stts_data_len = len(stts['data'])
+            stts_data = bytearray(stts['data'])
+            entry_count = int.from_bytes(stts_data[8:12], 'big')
+            stts_data[8:12] = (entry_count + diff).to_bytes(4, 'big')
+            # stts size doesn't change (only 4-byte count field updated, no new entries)
+            result[stts_start + 8:stts_start + 8 + old_stts_data_len] = bytes(stts_data)
+            logger.info(f"STTS: entry count {entry_count} -> {entry_count + diff}")
 
     # 3. Update all parent container sizes (stbl -> minf -> mdia -> trak -> moov)
     parents = [stsz, stbl, minf, mdia, video_trak]
@@ -159,7 +185,7 @@ def inject_fake_frames(data, target_frames=None, pre_shift=0):
     return bytes(result)
 
 
-def patch_video(input_path: str, output_path: str, custom_tag: str = "Patched with VideoBoost", title: str = "", artist: str = "akila", copyright: str = "akila", encode_1080p: bool = False) -> tuple[bool, str]:
+def patch_video(input_path: str, output_path: str, custom_tag: str = "Patched with VideoBoost", title: str = "", artist: str = "akila", copyright: str = "akila", encode_1080p: bool = False, stts_overflow: bool = True) -> tuple[bool, str]:
     if not os.path.exists(input_path):
         return False, f"Input file '{input_path}' not found."
 
@@ -203,7 +229,7 @@ def patch_video(input_path: str, output_path: str, custom_tag: str = "Patched wi
     except FileNotFoundError:
         return False, "FFmpeg not found"
 
-    # Stage 2: stsz injection + free atom + mdat corruption + fake atom
+    # Stage 2: stsz injection + free atom + metadata + mdat corruption + fake atom
     try:
         with open(output_path, 'rb') as f:
             data = bytearray(f.read())
@@ -213,7 +239,20 @@ def patch_video(input_path: str, output_path: str, custom_tag: str = "Patched wi
         data[ftyp_size:ftyp_size] = b'\x00\x00\x00\x08free'
         logger.info("Free atom: inserted after ftyp (size=8)")
 
-        patched = bytearray(inject_fake_frames(data, pre_shift=8))
+        # Build and inject iTunes metadata atoms at end of moov
+        md_atom = build_metadata_tree(artist=artist, copyright=copyright, comment=custom_tag, encoder="Lavf60.16.100")
+        if md_atom:
+            moov_pos = data.find(b'moov')
+            moov_size = int.from_bytes(data[moov_pos-4:moov_pos], 'big')
+            moov_end = moov_pos + moov_size
+            data[moov_end:moov_end] = md_atom
+            data[moov_pos-4:moov_pos] = (moov_size + len(md_atom)).to_bytes(4, 'big')
+            md_growth = len(md_atom)
+            logger.info(f"Metadata tree: injected {md_growth} bytes into moov")
+        else:
+            md_growth = 0
+
+        patched = bytearray(inject_fake_frames(data, pre_shift=8 + md_growth, stts_overflow=stts_overflow))
 
         # Corrupt mdat type (mdat -> mdau) so parser doesn't recognize it
         mdat_pos = patched.find(b'mdat')
