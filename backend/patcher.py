@@ -114,14 +114,21 @@ def inject_fake_frames(data, target_frames=None, pre_shift=0):
         stts_start = stts['start']
         stts_data = bytearray(stts['data'])
         entry_count = int.from_bytes(stts_data[4:8], 'big')
-        first_delta = int.from_bytes(stts_data[12:16], 'big')
+        total_frames = 0
+        total_dur = 0
+        for i in range(entry_count):
+            sc = int.from_bytes(stts_data[8+i*8:12+i*8], 'big')
+            sd = int.from_bytes(stts_data[12+i*8:16+i*8], 'big')
+            total_frames += sc
+            total_dur += sc * sd
+        avg_delta = total_dur // total_frames if total_frames else 750
         stts_data[4:8] = struct.pack('>I', 2)
-        stts_data[8:16] = struct.pack('>II', orig_count, first_delta)
-        stts_data[16:24] = struct.pack('>II', diff, first_delta)
+        stts_data[8:16] = struct.pack('>II', orig_count, avg_delta)
+        stts_data[16:24] = struct.pack('>II', diff, avg_delta)
         if len(stts_data) > 24:
             stts_data[24:] = b'\x00' * (len(stts_data) - 24)
         result[stts_start + 8:stts_start + 8 + len(stts_data)] = bytes(stts_data)
-        logger.info(f"STTS: rebuilt ({orig_count}+{diff} frames, delta={first_delta})")
+        logger.info(f"STTS: rebuilt ({orig_count}+{diff} frames, delta={avg_delta})")
 
     # 3. Update all parent container sizes (stbl -> minf -> mdia -> trak -> moov)
     parents = [stsz, stbl, minf, mdia, video_trak]
@@ -266,13 +273,7 @@ def patch_video(input_path: str, output_path: str, custom_tag: str = "Patched wi
         patched[moov_atom_start:moov_atom_start+4] = new_moov_size.to_bytes(4, 'big')
         logger.info(f"Metadata injected: moov {current_moov_size} -> {new_moov_size}")
 
-        # Corrupt mdat type (mdat -> mdau) so parser doesn't recognize it
-        mdat_pos = patched.find(b'mdat')
-        if mdat_pos >= 4:
-            cur_type = patched[mdat_pos:mdat_pos+4]
-            new_type = (int.from_bytes(cur_type, 'big') + 1).to_bytes(4, 'big')
-            patched[mdat_pos:mdat_pos+4] = new_type
-            logger.info(f"MDAT type: {cur_type} -> {new_type}")
+        # Note: reference file keeps mdat type unchanged (no corruption)
 
         # Append fake atom with invalid size (4 bytes < 8 minimum)
         patched += b'\x00\x00\x00\x04xxxx'
