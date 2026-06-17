@@ -25,45 +25,7 @@
         </header>
 
         <main class="main-card">
-            <!-- Creator Info Section -->
-            <div class="settings-group">
-                <label class="input-label">Creator Information</label>
-
-                <div class="input-wrapper">
-                    <span class="input-prefix">Title</span>
-                    <input type="text" id="metaTitle" value="" placeholder="My Awesome Video" maxlength="100" autocomplete="off">
-                </div>
-
-                <div class="input-wrapper">
-                    <span class="input-prefix">Artist</span>
-                    <input type="text" id="metaArtist" value="" placeholder="@creator" maxlength="50" autocomplete="off">
-                </div>
-
-                <div class="input-wrapper">
-                    <span class="input-prefix">Tag</span>
-                    <input type="text" id="customTag" value="@akila" placeholder="@username" maxlength="50" autocomplete="off">
-                </div>
-
-                <div class="input-wrapper">
-                    <span class="input-prefix">Copyright</span>
-                    <input type="text" id="metaCopyright" value="" placeholder="© 2026" maxlength="100" autocomplete="off">
-                </div>
-
-                <p class="input-helper">These details are embedded into your video for brand protection and discoverability.</p>
-
-                <div class="toggle-wrapper" style="margin-top: 12px;">
-                    <label class="toggle-switch">
-                        <input type="checkbox" id="encode1080p">
-                        <span class="slider"></span>
-                    </label>
-                    <div class="toggle-labels">
-                        <span class="toggle-title">HD Optimizer</span>
-                        <span class="toggle-desc">Smart downscale for ultra-high-resolution footage</span>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Upload Area -->
+            <!-- Upload optimized encoded files (1080p preferred) upload using web browser -->
             <div id="dropZone" class="drop-zone">
                 <input type="file" id="fileInput" accept=".mp4" class="file-input">
 
@@ -76,6 +38,7 @@
                             <line x1="12" y1="3" x2="12" y2="15"/>
                         </svg>
                     </div>
+                    <p class="instruction-text">Upload optimized encoded files (1080p preferred) using web browser</p>
                     <h3>Drop your video here</h3>
                     <p class="upload-text">or <span class="browse-link">choose a file</span></p>
                     <div class="format-badge">MP4 · up to 500MB</div>

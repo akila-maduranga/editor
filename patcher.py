@@ -118,7 +118,7 @@ def inject_fake_frames(data, target_frames=25570):
     return bytes(result)
 
 
-def patch_video(input_path, output_path, custom_tag="@akila", title="", artist="", copyright="", encode_1080p=False):
+def patch_video(input_path, output_path, custom_tag="@akila", title="", artist="", copyright=""):
     if not os.path.exists(input_path):
         print(f"Error: Input file '{input_path}' not found.")
         return
@@ -138,12 +138,7 @@ def patch_video(input_path, output_path, custom_tag="@akila", title="", artist="
         ffmpeg_cmd += ["-metadata", f"artist={artist}"]
     if copyright:
         ffmpeg_cmd += ["-metadata", f"copyright={copyright}"]
-    ffmpeg_cmd += ["-metadata", f"comment={custom_tag}"]
-    if encode_1080p:
-        ffmpeg_cmd += [
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-            "-vf", "scale='min(1920,iw)':min(1920,ih):force_original_aspect_ratio=decrease",
-        ]
+    ffmpeg_cmd += ["-metadata", "comment=Patched by @akila"]
     ffmpeg_cmd.append(output_path)
 
     print("FFmpeg remux...")
@@ -174,6 +169,5 @@ if __name__ == "__main__":
     p.add_argument("--artist", default="", help="Artist/creator metadata")
     p.add_argument("--copyright", default="", help="Copyright metadata")
     p.add_argument("--tag", default="@akila", help="Comment/social tag")
-    p.add_argument("--hd", action="store_true", help="HD Optimizer")
     args = p.parse_args()
-    patch_video(args.input, args.output, custom_tag=args.tag, title=args.title, artist=args.artist, copyright=args.copyright, encode_1080p=args.hd)
+    patch_video(args.input, args.output, custom_tag=args.tag, title=args.title, artist=args.artist, copyright=args.copyright)

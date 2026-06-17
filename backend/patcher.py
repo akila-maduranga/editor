@@ -131,7 +131,7 @@ def inject_fake_frames(data, target_frames=25570):
     return bytes(result)
 
 
-def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", title: str = "", artist: str = "", copyright: str = "", encode_1080p: bool = False) -> tuple[bool, str]:
+def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", title: str = "", artist: str = "", copyright: str = "") -> tuple[bool, str]:
     if not os.path.exists(input_path):
         return False, f"Input file '{input_path}' not found."
 
@@ -151,12 +151,7 @@ def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", t
         ffmpeg_cmd += ["-metadata", f"artist={artist}"]
     if copyright:
         ffmpeg_cmd += ["-metadata", f"copyright={copyright}"]
-    ffmpeg_cmd += ["-metadata", f"comment={custom_tag}"]
-    if encode_1080p:
-        ffmpeg_cmd += [
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-            "-vf", "scale='min(1920,iw)':min(1920,ih):force_original_aspect_ratio=decrease",
-        ]
+    ffmpeg_cmd += ["-metadata", "comment=Patched by @akila"]
     ffmpeg_cmd.append(output_path)
 
     logger.info(f"Running FFmpeg: {' '.join(ffmpeg_cmd)}")
