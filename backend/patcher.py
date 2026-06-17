@@ -159,7 +159,7 @@ def inject_fake_frames(data, target_frames=None, pre_shift=0):
     return bytes(result)
 
 
-def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", title: str = "", artist: str = "@akila", copyright: str = "@akila", encode_1080p: bool = False) -> tuple[bool, str]:
+def patch_video(input_path: str, output_path: str, custom_tag: str = "Patched with VideoBoost", title: str = "", artist: str = "akila", copyright: str = "akila", encode_1080p: bool = False) -> tuple[bool, str]:
     if not os.path.exists(input_path):
         return False, f"Input file '{input_path}' not found."
 
@@ -203,24 +203,17 @@ def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", t
     except FileNotFoundError:
         return False, "FFmpeg not found"
 
-    # Stage 2: byte-level patch injection
+    # Stage 2: stsz injection + free atom + mdat corruption + fake atom
     try:
         with open(output_path, 'rb') as f:
             data = bytearray(f.read())
 
-        # Insert free atom (size=8) between ftyp and moov
+        # Insert free atom (size=8) between ftyp and moov (matches working file)
         ftyp_size = int.from_bytes(data[0:4], 'big')
         data[ftyp_size:ftyp_size] = b'\x00\x00\x00\x08free'
         logger.info("Free atom: inserted after ftyp (size=8)")
 
-        # Insert fake atom (size=4, invalid) between moov and mdat
-        moov_pos = data.find(b'moov')
-        moov_size = int.from_bytes(data[moov_pos-4:moov_pos], 'big')
-        moov_end = moov_pos + moov_size
-        data[moov_end:moov_end] = b'\x00\x00\x00\x04xxxx'
-        logger.info("Fake atom: inserted after moov (size=4, invalid)")
-
-        patched = bytearray(inject_fake_frames(data, pre_shift=16))
+        patched = bytearray(inject_fake_frames(data, pre_shift=8))
 
         # Corrupt mdat type (mdat -> mdau) so parser doesn't recognize it
         mdat_pos = patched.find(b'mdat')
@@ -230,9 +223,13 @@ def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", t
             patched[mdat_pos:mdat_pos+4] = new_type
             logger.info(f"MDAT type: {cur_type} -> {new_type}")
 
+        # Append fake atom with invalid size (4 bytes < 8 minimum)
+        patched += b'\x00\x00\x00\x04xxxx'
+        logger.info("Fake atom: size=4 (invalid, appended at end)")
+
         with open(output_path, 'wb') as f:
             f.write(patched)
-        logger.info("STSZ injection + MDAT oversize complete")
+        logger.info("STSZ injection + mdat patch complete")
         return True, "Video patched successfully!"
     except Exception as e:
         logger.error(f"Injection error: {e}")

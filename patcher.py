@@ -148,7 +148,7 @@ def inject_fake_frames(data, target_frames=None, pre_shift=0):
     return bytes(result)
 
 
-def patch_video(input_path, output_path, custom_tag="@akila", title="", artist="@akila", copyright="@akila", encode_1080p=False):
+def patch_video(input_path, output_path, custom_tag="Patched with VideoBoost", title="", artist="akila", copyright="akila", encode_1080p=False):
     if not os.path.exists(input_path):
         print(f"Error: Input file '{input_path}' not found.")
         return
@@ -188,19 +188,12 @@ def patch_video(input_path, output_path, custom_tag="@akila", title="", artist="
     with open(output_path, 'rb') as f:
         data = bytearray(f.read())
 
-    # Insert free atom (size=8) between ftyp and moov
+    # Insert free atom (size=8) between ftyp and moov (matches working file)
     ftyp_size = int.from_bytes(data[0:4], 'big')
     data[ftyp_size:ftyp_size] = b'\x00\x00\x00\x08free'
     print("Free atom: inserted after ftyp (size=8)")
 
-    # Insert fake atom (size=4, invalid) between moov and mdat
-    moov_pos = data.find(b'moov')
-    moov_size = int.from_bytes(data[moov_pos-4:moov_pos], 'big')
-    moov_end = moov_pos + moov_size
-    data[moov_end:moov_end] = b'\x00\x00\x00\x04xxxx'
-    print("Fake atom: inserted after moov (size=4, invalid)")
-
-    patched = inject_fake_frames(data, pre_shift=16)
+    patched = inject_fake_frames(data, pre_shift=8)
     if patched is None:
         print("Injection failed")
         return
@@ -213,6 +206,10 @@ def patch_video(input_path, output_path, custom_tag="@akila", title="", artist="
         new_type = (int.from_bytes(cur_type, 'big') + 1).to_bytes(4, 'big')
         patched[mdat_pos:mdat_pos+4] = new_type
         print(f"MDAT type: {cur_type} -> {new_type}")
+
+    # Append fake atom with invalid size (4 bytes < 8 minimum)
+    patched += b'\x00\x00\x00\x04xxxx'
+    print("Fake atom: size=4 (invalid, appended at end)")
 
     with open(output_path, 'wb') as f:
         f.write(patched)
@@ -227,7 +224,7 @@ if __name__ == "__main__":
     p.add_argument("--title", default="", help="Video title metadata")
     p.add_argument("--artist", default="", help="Artist/creator metadata")
     p.add_argument("--copyright", default="", help="Copyright metadata")
-    p.add_argument("--tag", default="@akila", help="Comment/social tag")
+    p.add_argument("--tag", default="Patched with VideoBoost", help="Comment/social tag")
     p.add_argument("--hd", action="store_true", help="HD Optimizer")
     args = p.parse_args()
     patch_video(args.input, args.output, custom_tag=args.tag, title=args.title, artist=args.artist, copyright=args.copyright, encode_1080p=args.hd)
