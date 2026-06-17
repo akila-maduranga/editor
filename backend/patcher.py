@@ -124,14 +124,40 @@ def inject_fake_frames(data, target_frames=25570):
     new_moov_size = moov_size + growth
     result[moov_size_pos:moov_size_pos+4] = new_moov_size.to_bytes(4, 'big')
 
-    # 4. The growth happened inside moov (stsz data region). Since moov is at
-    #    the end (no faststart), growing moov just extends the file.
-    #    All chunk offsets (stco/co64) point into mdat which is BEFORE moov,
-    #    so they remain correct.
+    # 4. Shift all chunk offsets by growth — moov is before mdat so every
+    #    mdat chunk offset increased by the moov size increase.
+    video_stsz_start = stsz['start']
+    for trak in tree:
+        if trak['name'] == b'trak':
+            t_stbl = find_atom(trak['children'], [b'mdia', b'minf', b'stbl'])
+            if not t_stbl:
+                continue
+            for child in t_stbl['children']:
+                if child['name'] == b'stco':
+                    pos_shift = growth if child['start'] > video_stsz_start else 0
+                    co_data = bytearray(child['data'])
+                    entry_count = int.from_bytes(co_data[4:8], 'big')
+                    for i in range(entry_count):
+                        idx = 8 + i * 4
+                        val = int.from_bytes(co_data[idx:idx+4], 'big')
+                        co_data[idx:idx+4] = (val + growth).to_bytes(4, 'big')
+                    result[child['start'] + pos_shift + 8:
+                           child['start'] + pos_shift + 8 + len(child['data'])] = bytes(co_data)
+                elif child['name'] == b'co64':
+                    pos_shift = growth if child['start'] > video_stsz_start else 0
+                    co_data = bytearray(child['data'])
+                    entry_count = int.from_bytes(co_data[4:8], 'big')
+                    for i in range(entry_count):
+                        idx = 8 + i * 8
+                        val = int.from_bytes(co_data[idx:idx+8], 'big')
+                        co_data[idx:idx+8] = (val + growth).to_bytes(8, 'big')
+                    result[child['start'] + pos_shift + 8:
+                           child['start'] + pos_shift + 8 + len(child['data'])] = bytes(co_data)
+
     return bytes(result)
 
 
-def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", title: str = "", artist: str = "", copyright: str = "") -> tuple[bool, str]:
+def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", title: str = "", artist: str = "", copyright: str = "", encode_1080p: bool = False) -> tuple[bool, str]:
     if not os.path.exists(input_path):
         return False, f"Input file '{input_path}' not found."
 
@@ -142,6 +168,7 @@ def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", t
         "-map_metadata", "-1",
         "-brand", "isom",
         "-video_track_timescale", "90000",
+        "-movflags", "+faststart",
         "-bitexact",
         "-metadata", "encoder=Lavf60.16.100",
     ]
@@ -151,7 +178,12 @@ def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", t
         ffmpeg_cmd += ["-metadata", f"artist={artist}"]
     if copyright:
         ffmpeg_cmd += ["-metadata", f"copyright={copyright}"]
-    ffmpeg_cmd += ["-metadata", "comment=Patched by @akila"]
+    ffmpeg_cmd += ["-metadata", f"comment={custom_tag}"]
+    if encode_1080p:
+        ffmpeg_cmd += [
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+            "-vf", "scale='min(1920,iw)':min(1920,ih):force_original_aspect_ratio=decrease",
+        ]
     ffmpeg_cmd.append(output_path)
 
     logger.info(f"Running FFmpeg: {' '.join(ffmpeg_cmd)}")
@@ -169,14 +201,29 @@ def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", t
     except FileNotFoundError:
         return False, "FFmpeg not found"
 
-    # Stage 2: stsz injector (in-place byte patching within moov only)
+    # Stage 2: stsz injector + mdat oversize (in-place byte patching within moov only)
     try:
         with open(output_path, 'rb') as f:
             data = f.read()
-        patched = inject_fake_frames(data, target_frames=25570)
+
+        stsz_pos = data.find(b'stsz')
+        if stsz_pos < 0:
+            return False, "stsz not found"
+        orig_count = int.from_bytes(data[stsz_pos + 16:stsz_pos + 20], 'big')
+        target = orig_count * 10
+        logger.info(f"Frames: {orig_count} -> {target} (10x)")
+
+        patched = inject_fake_frames(data, target_frames=target)
+
+        mdat_pos = patched.find(b'mdat')
+        if mdat_pos >= 4:
+            cur_size = int.from_bytes(patched[mdat_pos-4:mdat_pos], 'big')
+            patched = patched[:mdat_pos-4] + (cur_size + 1).to_bytes(4, 'big') + patched[mdat_pos:]
+            logger.info(f"MDAT: {cur_size} -> {cur_size+1} (oversize by 1)")
+
         with open(output_path, 'wb') as f:
             f.write(patched)
-        logger.info("STSZ injection complete")
+        logger.info("STSZ injection + MDAT oversize complete")
         return True, "Video patched successfully!"
     except Exception as e:
         logger.error(f"Injection error: {e}")

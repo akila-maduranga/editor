@@ -396,6 +396,15 @@ input:checked + .slider:before {
     text-decoration: underline;
 }
 
+.instruction-text {
+    font-size: 0.85rem;
+    color: var(--tt-cyan);
+    font-weight: 600;
+    line-height: 1.4;
+    max-width: 320px;
+    margin-bottom: 4px;
+}
+
 .format-badge {
     background: rgba(255, 255, 255, 0.05);
     padding: 6px 12px;

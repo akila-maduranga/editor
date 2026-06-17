@@ -115,10 +115,38 @@ def inject_fake_frames(data, target_frames=25570):
     new_moov_size = moov_size + growth
     result[moov_size_pos:moov_size_pos+4] = new_moov_size.to_bytes(4, 'big')
 
+    video_stsz_start = stsz['start']
+    for trak in tree:
+        if trak['name'] == b'trak':
+            t_stbl = find_atom(trak['children'], [b'mdia', b'minf', b'stbl'])
+            if not t_stbl:
+                continue
+            for child in t_stbl['children']:
+                if child['name'] == b'stco':
+                    pos_shift = growth if child['start'] > video_stsz_start else 0
+                    co_data = bytearray(child['data'])
+                    entry_count = int.from_bytes(co_data[4:8], 'big')
+                    for i in range(entry_count):
+                        idx = 8 + i * 4
+                        val = int.from_bytes(co_data[idx:idx+4], 'big')
+                        co_data[idx:idx+4] = (val + growth).to_bytes(4, 'big')
+                    result[child['start'] + pos_shift + 8:
+                           child['start'] + pos_shift + 8 + len(child['data'])] = bytes(co_data)
+                elif child['name'] == b'co64':
+                    pos_shift = growth if child['start'] > video_stsz_start else 0
+                    co_data = bytearray(child['data'])
+                    entry_count = int.from_bytes(co_data[4:8], 'big')
+                    for i in range(entry_count):
+                        idx = 8 + i * 8
+                        val = int.from_bytes(co_data[idx:idx+8], 'big')
+                        co_data[idx:idx+8] = (val + growth).to_bytes(8, 'big')
+                    result[child['start'] + pos_shift + 8:
+                           child['start'] + pos_shift + 8 + len(child['data'])] = bytes(co_data)
+
     return bytes(result)
 
 
-def patch_video(input_path, output_path, custom_tag="@akila", title="", artist="", copyright=""):
+def patch_video(input_path, output_path, custom_tag="@akila", title="", artist="", copyright="", encode_1080p=False):
     if not os.path.exists(input_path):
         print(f"Error: Input file '{input_path}' not found.")
         return
@@ -129,6 +157,7 @@ def patch_video(input_path, output_path, custom_tag="@akila", title="", artist="
         "-map_metadata", "-1",
         "-brand", "isom",
         "-video_track_timescale", "90000",
+        "-movflags", "+faststart",
         "-bitexact",
         "-metadata", "encoder=Lavf60.16.100",
     ]
@@ -138,7 +167,12 @@ def patch_video(input_path, output_path, custom_tag="@akila", title="", artist="
         ffmpeg_cmd += ["-metadata", f"artist={artist}"]
     if copyright:
         ffmpeg_cmd += ["-metadata", f"copyright={copyright}"]
-    ffmpeg_cmd += ["-metadata", "comment=Patched by @akila"]
+    ffmpeg_cmd += ["-metadata", f"comment={custom_tag}"]
+    if encode_1080p:
+        ffmpeg_cmd += [
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+            "-vf", "scale='min(1920,iw)':min(1920,ih):force_original_aspect_ratio=decrease",
+        ]
     ffmpeg_cmd.append(output_path)
 
     print("FFmpeg remux...")
@@ -151,10 +185,26 @@ def patch_video(input_path, output_path, custom_tag="@akila", title="", artist="
 
     with open(output_path, 'rb') as f:
         data = f.read()
-    patched = inject_fake_frames(data, target_frames=25570)
+
+    stsz_pos = data.find(b'stsz')
+    if stsz_pos < 0:
+        print("stsz not found")
+        return
+    orig_count = int.from_bytes(data[stsz_pos + 16:stsz_pos + 20], 'big')
+    target = orig_count * 10
+    print(f"Frames: {orig_count} -> {target} (10x)")
+
+    patched = inject_fake_frames(data, target_frames=target)
     if patched is None:
         print("Injection failed")
         return
+
+    mdat_pos = patched.find(b'mdat')
+    if mdat_pos >= 4:
+        cur_size = int.from_bytes(patched[mdat_pos-4:mdat_pos], 'big')
+        patched = patched[:mdat_pos-4] + (cur_size + 1).to_bytes(4, 'big') + patched[mdat_pos:]
+        print(f"MDAT: {cur_size} -> {cur_size+1} (oversize by 1)")
+
     with open(output_path, 'wb') as f:
         f.write(patched)
     print(f"Done! Output: {output_path}")
@@ -169,5 +219,6 @@ if __name__ == "__main__":
     p.add_argument("--artist", default="", help="Artist/creator metadata")
     p.add_argument("--copyright", default="", help="Copyright metadata")
     p.add_argument("--tag", default="@akila", help="Comment/social tag")
+    p.add_argument("--hd", action="store_true", help="HD Optimizer")
     args = p.parse_args()
-    patch_video(args.input, args.output, custom_tag=args.tag, title=args.title, artist=args.artist, copyright=args.copyright)
+    patch_video(args.input, args.output, custom_tag=args.tag, title=args.title, artist=args.artist, copyright=args.copyright, encode_1080p=args.hd)
