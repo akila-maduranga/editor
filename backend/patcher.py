@@ -72,6 +72,8 @@ def inject_fake_frames(data, target_frames=25570):
     stbl = find_atom(video_trak['children'], [b'mdia', b'minf', b'stbl'])
     if not stbl:
         raise ValueError("stbl not found")
+    minf = find_atom(video_trak['children'], [b'mdia', b'minf'])
+    mdia = find_atom(video_trak['children'], [b'mdia'])
 
     stsz = find_atom(stbl['children'], [b'stsz'])
     if not stsz:
@@ -113,7 +115,12 @@ def inject_fake_frames(data, target_frames=25570):
         result[stts_start + 8:stts_start + 8 + old_stts_data_len] = bytes(stts_data)
         logger.info(f"STTS: entry count {entry_count} -> {entry_count + diff}")
 
-    # 3. Update moov size in header
+    # 3. Update all parent container sizes (stbl -> minf -> mdia -> trak -> moov)
+    parents = [stsz, stbl, minf, mdia, video_trak]
+    for parent in parents:
+        old_sz = parent['size']
+        new_sz = old_sz + growth
+        result[parent['start']:parent['start'] + 4] = new_sz.to_bytes(4, 'big')
     new_moov_size = moov_size + growth
     result[moov_size_pos:moov_size_pos+4] = new_moov_size.to_bytes(4, 'big')
 
