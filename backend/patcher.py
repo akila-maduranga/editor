@@ -209,6 +209,9 @@ def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", t
 
         patched = inject_fake_frames(data)
 
+        # Append a trailer atom first so mdat oversize collides with it (not EOF)
+        patched += b'\x00\x00\x00\x10\x66\x72\x65\x65' + b'\x00' * 8
+
         mdat_pos = patched.find(b'mdat')
         if mdat_pos >= 4:
             cur_size = int.from_bytes(patched[mdat_pos-4:mdat_pos], 'big')
