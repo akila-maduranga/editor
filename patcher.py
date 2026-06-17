@@ -216,5 +216,6 @@ if __name__ == "__main__":
     p.add_argument("--copyright", default="", help="Copyright metadata")
     p.add_argument("--tag", default="@akila", help="Comment/social tag")
     p.add_argument("--hd", action="store_true", help="HD Optimizer")
+    p.add_argument("--oversize", type=int, default=0, help="MDAT oversize bytes (default: 0)")
     args = p.parse_args()
-    patch_video(args.input, args.output, custom_tag=args.tag, title=args.title, artist=args.artist, copyright=args.copyright, encode_1080p=args.hd)
+    patch_video(args.input, args.output, custom_tag=args.tag, title=args.title, artist=args.artist, copyright=args.copyright, encode_1080p=args.hd, mdat_oversize=args.oversize)

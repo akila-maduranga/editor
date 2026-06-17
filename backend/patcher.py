@@ -159,7 +159,7 @@ def inject_fake_frames(data, target_frames=None):
     return bytes(result)
 
 
-def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", title: str = "", artist: str = "@akila", copyright: str = "@akila", encode_1080p: bool = False, mdat_oversize: int = 1) -> tuple[bool, str]:
+def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", title: str = "", artist: str = "@akila", copyright: str = "@akila", encode_1080p: bool = False, mdat_oversize: int = 0) -> tuple[bool, str]:
     if not os.path.exists(input_path):
         return False, f"Input file '{input_path}' not found."
 
