@@ -159,7 +159,7 @@ def inject_fake_frames(data, target_frames=None):
     return bytes(result)
 
 
-def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", title: str = "", artist: str = "@akila", copyright: str = "@akila", encode_1080p: bool = False, mdat_oversize: int = 0) -> tuple[bool, str]:
+def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", title: str = "", artist: str = "@akila", copyright: str = "@akila", encode_1080p: bool = False) -> tuple[bool, str]:
     if not os.path.exists(input_path):
         return False, f"Input file '{input_path}' not found."
 
@@ -210,13 +210,17 @@ def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", t
 
         patched = inject_fake_frames(data)
 
-        # Corrupt mdat size by mdat_oversize bytes to trigger parser warning
+        # Corrupt mdat type (mdat -> mdau) so parser doesn't recognize it
         mdat_pos = patched.find(b'mdat')
-        if mdat_pos >= 4 and mdat_oversize > 0:
-            cur_size = int.from_bytes(patched[mdat_pos-4:mdat_pos], 'big')
-            new_size = cur_size + mdat_oversize
-            patched = patched[:mdat_pos-4] + new_size.to_bytes(4, 'big') + patched[mdat_pos:]
-            logger.info(f"MDAT: {cur_size} -> {new_size} (oversize by {mdat_oversize})")
+        if mdat_pos >= 4:
+            cur_type = patched[mdat_pos:mdat_pos+4]
+            new_type = (int.from_bytes(cur_type, 'big') + 1).to_bytes(4, 'big')
+            patched[mdat_pos:mdat_pos+4] = new_type
+            logger.info(f"MDAT type: {cur_type} -> {new_type}")
+
+        # Append fake trailer atom with invalid size (0xFFFFFFFF)
+        patched += b'\xff\xff\xff\xffxxxx\x00\x00\x00\x00\x00\x00\x00\x00'
+        logger.info("Fake trailer: size=0xFFFFFFFF type='xxxx'")
 
         with open(output_path, 'wb') as f:
             f.write(patched)

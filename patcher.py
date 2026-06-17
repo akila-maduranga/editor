@@ -148,7 +148,7 @@ def inject_fake_frames(data, target_frames=None):
     return bytes(result)
 
 
-def patch_video(input_path, output_path, custom_tag="@akila", title="", artist="@akila", copyright="@akila", encode_1080p=False, mdat_oversize=1):
+def patch_video(input_path, output_path, custom_tag="@akila", title="", artist="@akila", copyright="@akila", encode_1080p=False):
     if not os.path.exists(input_path):
         print(f"Error: Input file '{input_path}' not found.")
         return
@@ -193,13 +193,17 @@ def patch_video(input_path, output_path, custom_tag="@akila", title="", artist="
         print("Injection failed")
         return
 
-    # Corrupt mdat size by mdat_oversize bytes to trigger parser warning
+    # Corrupt mdat type (mdat -> mdau) so parser doesn't recognize it
     mdat_pos = patched.find(b'mdat')
-    if mdat_pos >= 4 and mdat_oversize > 0:
-        cur_size = int.from_bytes(patched[mdat_pos-4:mdat_pos], 'big')
-        new_size = cur_size + mdat_oversize
-        patched = patched[:mdat_pos-4] + new_size.to_bytes(4, 'big') + patched[mdat_pos:]
-        print(f"MDAT: {cur_size} -> {new_size} (oversize by {mdat_oversize})")
+    if mdat_pos >= 4:
+        cur_type = patched[mdat_pos:mdat_pos+4]
+        new_type = (int.from_bytes(cur_type, 'big') + 1).to_bytes(4, 'big')
+        patched[mdat_pos:mdat_pos+4] = new_type
+        print(f"MDAT type: {cur_type} -> {new_type}")
+
+    # Append fake trailer atom with invalid size (0xFFFFFFFF)
+    patched += b'\xff\xff\xff\xffxxxx\x00\x00\x00\x00\x00\x00\x00\x00'
+    print("Fake trailer: size=0xFFFFFFFF type='xxxx'")
 
     with open(output_path, 'wb') as f:
         f.write(patched)
@@ -216,6 +220,5 @@ if __name__ == "__main__":
     p.add_argument("--copyright", default="", help="Copyright metadata")
     p.add_argument("--tag", default="@akila", help="Comment/social tag")
     p.add_argument("--hd", action="store_true", help="HD Optimizer")
-    p.add_argument("--oversize", type=int, default=0, help="MDAT oversize bytes (default: 0)")
     args = p.parse_args()
-    patch_video(args.input, args.output, custom_tag=args.tag, title=args.title, artist=args.artist, copyright=args.copyright, encode_1080p=args.hd, mdat_oversize=args.oversize)
+    patch_video(args.input, args.output, custom_tag=args.tag, title=args.title, artist=args.artist, copyright=args.copyright, encode_1080p=args.hd)
