@@ -4,6 +4,7 @@ import subprocess
 import time
 
 CONTAINERS = [b'moov', b'trak', b'mdia', b'minf', b'stbl', b'edts', b'udta', b'meta', b'ilst']
+VERSION_ATOMS = [b'meta']
 
 
 def build_ilst_entry(key, value):
@@ -32,6 +33,29 @@ def build_metadata_tree(artist="", copyright="", comment="", encoder=""):
 
 
 def read_atoms_in_range(data, offset, end_pos):
+    atoms = []
+    while offset + 8 <= end_pos and offset + 8 <= len(data):
+        size = int.from_bytes(data[offset:offset+4], 'big')
+        if size == 0:
+            break
+        if size == 1:
+            size = int.from_bytes(data[offset+8:offset+16], 'big')
+            header_size = 16
+        else:
+            header_size = 8
+        atom_end = offset + size
+        if atom_end > end_pos:
+            atom_end = end_pos
+        name = bytes(data[offset+4:offset+8])
+        if name in CONTAINERS:
+            version_offset = 4 if name in VERSION_ATOMS else 0
+            children, _ = read_atoms_in_range(data, offset + header_size + version_offset, atom_end)
+            atoms.append({'name': name, 'children': children, 'start': offset, 'size': size})
+        else:
+            atoms.append({'name': name, 'data': bytes(data[offset+header_size:atom_end]),
+                          'start': offset, 'size': size})
+        offset = atom_end
+    return atoms, offset
     atoms = []
     while offset + 8 <= end_pos and offset + 8 <= len(data):
         size = int.from_bytes(data[offset:offset+4], 'big')

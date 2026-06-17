@@ -6,6 +6,7 @@ import subprocess
 logger = logging.getLogger("tiktok_patcher")
 
 CONTAINERS = [b'moov', b'trak', b'mdia', b'minf', b'stbl', b'edts', b'udta', b'meta', b'ilst']
+VERSION_ATOMS = [b'meta']
 
 
 def build_ilst_entry(key, value):
@@ -49,7 +50,8 @@ def read_atoms_in_range(data, offset, end_pos):
             atom_end = end_pos
         name = bytes(data[offset+4:offset+8])
         if name in CONTAINERS:
-            children, _ = read_atoms_in_range(data, offset + header_size, atom_end)
+            version_offset = 4 if name in VERSION_ATOMS else 0
+            children, _ = read_atoms_in_range(data, offset + header_size + version_offset, atom_end)
             atoms.append({'name': name, 'children': children, 'start': offset, 'size': size})
         else:
             atoms.append({'name': name, 'data': bytes(data[offset+header_size:atom_end]),
