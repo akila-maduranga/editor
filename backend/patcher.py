@@ -218,9 +218,9 @@ def patch_video(input_path: str, output_path: str, custom_tag: str = "@akila", t
             patched[mdat_pos:mdat_pos+4] = new_type
             logger.info(f"MDAT type: {cur_type} -> {new_type}")
 
-        # Append fake trailer atom with invalid size (0xFFFFFFFF)
-        patched += b'\xff\xff\xff\xffxxxx\x00\x00\x00\x00\x00\x00\x00\x00'
-        logger.info("Fake trailer: size=0xFFFFFFFF type='xxxx'")
+        # Append fake trailer atom with invalid size (4 bytes < 8 minimum)
+        patched += b'\x00\x00\x00\x04xxxx'
+        logger.info("Fake trailer: size=4 (invalid, < 8)")
 
         with open(output_path, 'wb') as f:
             f.write(patched)
